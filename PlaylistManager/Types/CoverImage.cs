@@ -55,7 +55,7 @@ namespace PlaylistManager.Types
 
         private static void QueueLoadSprite(CoverImage coverImage)
         {
-            SpriteQueue.Enqueue(() =>
+            SpriteQueue.Enqueue(async () =>
             {
                 try
                 {
@@ -63,7 +63,7 @@ namespace PlaylistManager.Types
                     {
                         var imageBytes = new byte[imageStream.Length];
                         imageStream.Read(imageBytes, 0, (int)imageStream.Length);
-                        coverImage._sprite = BeatSaberMarkupLanguage.Utilities.LoadSpriteRaw(imageBytes);
+                        coverImage._sprite = await BeatSaberMarkupLanguage.Utilities.LoadSpriteAsync(imageBytes);
                         if (coverImage._sprite != null)
                         {
                             coverImage.SpriteWasLoaded = true;

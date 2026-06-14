@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using IPA.Loader;
 using SiraUtil.Zenject;
@@ -17,7 +18,7 @@ using static BeatSaberMarkupLanguage.Components.CustomListTableData;
 
 namespace PlaylistManager.UI
 {
-    public class ImageSelectionModalController : NotifiableBase
+    public class ImageSelectionModalController : NotifiableBase, IAsyncInitializable
     {
         private readonly LevelPackDetailViewController levelPackDetailViewController;
         private readonly PopupModalsController popupModalsController;
@@ -25,8 +26,8 @@ namespace PlaylistManager.UI
         private readonly BSMLParser bsmlParser;
 
         private readonly string IMAGES_PATH = Path.Combine(PlaylistLibUtils.playlistManager.PlaylistPath, "CoverImages");
-        private readonly Sprite playlistManagerIcon;
         private readonly Dictionary<string, CoverImage> coverImages;
+        private Sprite playlistManagerIcon;
         private bool parsed;
         private int selectedIndex;
 
@@ -65,9 +66,11 @@ namespace PlaylistManager.UI
             }
 
             coverImages = new Dictionary<string, CoverImage>();
-            playlistManagerIcon = BeatSaberMarkupLanguage.Utilities.FindSpriteInAssembly("PlaylistManager.Icons.DefaultIcon.png");
             parsed = false;
         }
+
+        public async Task InitializeAsync(CancellationToken token) 
+            =>  playlistManagerIcon = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync("PlaylistManager.Icons.DefaultIcon.png");
 
         private void Parse()
         {

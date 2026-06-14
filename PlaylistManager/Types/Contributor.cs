@@ -53,11 +53,11 @@ namespace PlaylistManager.Types
         }
 
         [UIAction("#post-parse")]
-        private void PostParse()
+        private async void PostParse()
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(name)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(role)));
-            iconImage.sprite = BeatSaberMarkupLanguage.Utilities.FindSpriteInAssembly(iconPath);
+            iconImage.sprite = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync(iconPath);
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(YoutubeActive)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TwitchActive)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GithubActive)));

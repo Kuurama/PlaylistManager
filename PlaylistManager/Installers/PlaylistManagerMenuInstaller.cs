@@ -14,7 +14,7 @@ namespace PlaylistManager.Installers
             Container.BindInterfacesAndSelfTo<AddPlaylistModalController>().AsSingle();
             Container.BindInterfacesTo<PlaylistDetailViewButtonsController>().AsSingle();
             Container.BindInterfacesAndSelfTo<PlaylistDetailsViewController>().AsSingle();
-            Container.Bind<ImageSelectionModalController>().AsSingle();
+            Container.BindInterfacesAndSelfTo<ImageSelectionModalController>().AsSingle();
             Container.BindInterfacesAndSelfTo<PopupModalsController>().AsSingle();
 
             Container.BindInterfacesAndSelfTo<PlaylistDownloaderViewController>().FromNewComponentOnNewGameObject().AsSingle();

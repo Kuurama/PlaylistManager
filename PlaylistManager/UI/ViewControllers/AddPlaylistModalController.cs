@@ -13,12 +13,14 @@ using BeatSaberMarkupLanguage.Parser;
 using System.IO;
 using System.ComponentModel;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using IPA.Loader;
 using SiraUtil.Zenject;
 
 namespace PlaylistManager.UI
 {
-    public class AddPlaylistModalController : INotifyPropertyChanged
+    public class AddPlaylistModalController : INotifyPropertyChanged, IAsyncInitializable
     {
         private readonly StandardLevelDetailViewController standardLevelDetailViewController;
         private readonly PopupModalsController popupModalsController;
@@ -29,7 +31,7 @@ namespace PlaylistManager.UI
         private List<BeatSaberPlaylistsLib.PlaylistManager> childManagers;
         private List<IPlaylist> childPlaylists;
 
-        private readonly Sprite folderIcon;
+        private Sprite folderIcon;
         private bool parsed;
         public event PropertyChangedEventHandler PropertyChanged;
 
@@ -64,9 +66,12 @@ namespace PlaylistManager.UI
             this.popupModalsController = popupModalsController;
             this.pluginMetadata = pluginMetadata.Value;
             this.bsmlParser = bsmlParser;
-            folderIcon = BeatSaberMarkupLanguage.Utilities.FindSpriteInAssembly("PlaylistManager.Icons.FolderIcon.png");
+           
             parsed = false;
         }
+
+        public async Task InitializeAsync(CancellationToken token) 
+            => folderIcon = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync("PlaylistManager.Icons.FolderIcon.png");
 
         private void Parse()
         {
