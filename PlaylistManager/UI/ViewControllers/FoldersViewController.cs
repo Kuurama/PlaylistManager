@@ -22,7 +22,7 @@ using Zenject;
 
 namespace PlaylistManager.UI
 {
-    public class FoldersViewController : IAsyncInitializable, IDisposable, INotifyPropertyChanged, ILevelCollectionsTableUpdater, ILevelCategoryUpdater, IPMRefreshable, TableView.IDataSource
+    public class FoldersViewController : IInitializable, IDisposable, INotifyPropertyChanged, ILevelCollectionsTableUpdater, ILevelCategoryUpdater, IPMRefreshable, TableView.IDataSource
     {
         private readonly AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController;
         private readonly MainFlowCoordinator mainFlowCoordinator;
@@ -93,7 +93,7 @@ namespace PlaylistManager.UI
             folderMode = FolderMode.None;
         }
 
-        public async Task InitializeAsync(CancellationToken token)
+        public async void Initialize()
         {
             levelPacksSprite = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync("PlaylistManager.Icons.LevelPacks.png");
             customPacksSprite = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync("PlaylistManager.Icons.CustomPacks.png");

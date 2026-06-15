@@ -14,11 +14,12 @@ using System.Threading.Tasks;
 using IPA.Loader;
 using SiraUtil.Zenject;
 using UnityEngine;
+using Zenject;
 using static BeatSaberMarkupLanguage.Components.CustomListTableData;
 
 namespace PlaylistManager.UI
 {
-    public class ImageSelectionModalController : NotifiableBase, IAsyncInitializable
+    public class ImageSelectionModalController : NotifiableBase, IInitializable
     {
         private readonly LevelPackDetailViewController levelPackDetailViewController;
         private readonly PopupModalsController popupModalsController;
@@ -69,7 +70,7 @@ namespace PlaylistManager.UI
             parsed = false;
         }
 
-        public async Task InitializeAsync(CancellationToken token) 
+        public async void Initialize() 
             =>  playlistManagerIcon = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync("PlaylistManager.Icons.DefaultIcon.png");
 
         private void Parse()

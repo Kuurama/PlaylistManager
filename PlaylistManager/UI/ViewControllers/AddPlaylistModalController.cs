@@ -17,10 +17,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using IPA.Loader;
 using SiraUtil.Zenject;
+using Zenject;
 
 namespace PlaylistManager.UI
 {
-    public class AddPlaylistModalController : INotifyPropertyChanged, IAsyncInitializable
+    public class AddPlaylistModalController : INotifyPropertyChanged, IInitializable
     {
         private readonly StandardLevelDetailViewController standardLevelDetailViewController;
         private readonly PopupModalsController popupModalsController;
@@ -70,7 +71,7 @@ namespace PlaylistManager.UI
             parsed = false;
         }
 
-        public async Task InitializeAsync(CancellationToken token) 
+        public async void Initialize() 
             => folderIcon = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync("PlaylistManager.Icons.FolderIcon.png");
 
         private void Parse()
