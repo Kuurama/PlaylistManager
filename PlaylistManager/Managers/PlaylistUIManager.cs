@@ -131,7 +131,29 @@ namespace PlaylistManager.Managers
             LevelFilteringNavigationController_UpdateSecondChildControllerContent.SecondChildControllerUpdatedEvent -= LevelFilteringNavigationController_SecondChildControllerUpdatedEvent;
             if (annotatedBeatmapLevelCollectionsViewController.isActiveAndEnabled)
             {
-                LevelCollectionTableViewUpdatedEvent?.Invoke(downloadingBeatmapLevelCollections, downloadingBeatmapCollectionIdx);
+                if (PluginConfig.Instance.FoldersDisabled)
+                {
+                    LevelCollectionTableViewUpdatedEvent?.Invoke(downloadingBeatmapLevelCollections, downloadingBeatmapCollectionIdx);
+                }
+                else
+                {
+                    // Rebuild the visible directory instead of restoring a stale snapshot of
+                    // FolderLevelPack instances captured before SongCore refreshed its packs.
+                    var preferredPackId = downloadingBeatmapLevelCollections != null
+                        && downloadingBeatmapCollectionIdx >= 0
+                        && downloadingBeatmapCollectionIdx < downloadingBeatmapLevelCollections.Length
+                            ? downloadingBeatmapLevelCollections[downloadingBeatmapCollectionIdx]?.packID
+                            : null;
+
+                    if (refreshable is FoldersViewController foldersViewController)
+                    {
+                        foldersViewController.Refresh(preferredPackId);
+                    }
+                    else
+                    {
+                        refreshable.Refresh();
+                    }
+                }
             }
             if (levelCollectionNavigationController.isActiveAndEnabled && downloadingBeatmap != null)
             {

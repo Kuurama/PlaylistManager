@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using BeatSaberPlaylistsLib.Types;
+using PlaylistManager.Configuration;
 using PlaylistManager.Interfaces;
 using PlaylistManager.Utilities;
 using UnityEngine;
@@ -13,11 +14,14 @@ namespace PlaylistManager.UI
     internal class PlaylistUpdater : IInitializable, IDisposable, ILevelCollectionUpdater
     {
         private readonly HashSet<IPlaylist> playlistReferences = new();
+        private readonly HashSet<IPlaylist> observedPlaylists = new();
         private readonly AnnotatedBeatmapLevelCollectionsViewController _annotatedBeatmapLevelCollectionsViewController;
         private readonly LevelCollectionNavigationController _levelCollectionNavigationController;
         private readonly LevelPackDetailViewController _levelPackDetailViewController;
 
         private IPlaylist _selectedPlaylist;
+
+        internal event Action<BeatmapLevelPack> PlaylistPackRefreshed;
 
         private PlaylistUpdater(AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController, LevelCollectionNavigationController levelCollectionNavigationController, LevelPackDetailViewController levelPackDetailViewController)
         {
@@ -28,10 +32,20 @@ namespace PlaylistManager.UI
 
         public void Initialize()
         {
-            foreach (var playlist in PlaylistLibUtils.TryGetAllPlaylists())
+            IPlaylist[] initialPlaylists;
+            try
             {
-                playlist.PlaylistChanged += UpdatePlaylist;
+                initialPlaylists = PluginConfig.Instance.FoldersDisabled
+                    ? PlaylistLibUtils.TryGetAllPlaylists()
+                    : PlaylistLibUtils.TryGetDirectPlaylists(PlaylistLibUtils.playlistManager);
             }
+            catch (Exception exception)
+            {
+                Plugin.Log.Error($"Could not initialize playlist listeners: {exception}");
+                initialPlaylists = Array.Empty<IPlaylist>();
+            }
+
+            ReplacePlaylistChangedListeners(initialPlaylists);
 
             PlaylistLibUtils.playlistManager.PlaylistsRefreshRequested += HandleDidRequestPlaylistsRefresh;
         }
@@ -43,10 +57,12 @@ namespace PlaylistManager.UI
                 playlist.SpriteLoaded -= SelectedPlaylist_SpriteLoaded;
             }
 
-            foreach (var playlist in PlaylistLibUtils.TryGetAllPlaylists())
+            foreach (var playlist in observedPlaylists)
             {
                 playlist.PlaylistChanged -= UpdatePlaylist;
             }
+
+            observedPlaylists.Clear();
 
             PlaylistLibUtils.playlistManager.PlaylistsRefreshRequested -= HandleDidRequestPlaylistsRefresh;
         }
@@ -58,10 +74,47 @@ namespace PlaylistManager.UI
 
         public void RefreshPlaylistChangedListeners(BeatmapLevelPack[] beatmapLevelPacks = null)
         {
-            foreach (var playlist in beatmapLevelPacks?.Select(p => ((PlaylistLevelPack)p).playlist) ?? PlaylistLibUtils.TryGetAllPlaylists())
+            if (beatmapLevelPacks != null)
+            {
+                ReplacePlaylistChangedListeners(beatmapLevelPacks
+                    .OfType<PlaylistLevelPack>()
+                    .Select(pack => pack.playlist));
+                return;
+            }
+
+            foreach (var playlist in observedPlaylists.ToArray())
             {
                 playlist.PlaylistChanged -= UpdatePlaylist;
                 playlist.PlaylistChanged += UpdatePlaylist;
+            }
+        }
+
+        /// <summary>
+        /// Observes only the playlists represented by the current directory grid. This keeps
+        /// nested playlists lazy while folder navigation is enabled.
+        /// </summary>
+        public void ShowOnlyPlaylistChangedListeners(IEnumerable<BeatmapLevelPack> beatmapLevelPacks)
+        {
+            ReplacePlaylistChangedListeners(beatmapLevelPacks
+                .OfType<PlaylistLevelPack>()
+                .Select(pack => pack.playlist));
+        }
+
+        private void ReplacePlaylistChangedListeners(IEnumerable<IPlaylist> playlists)
+        {
+            var nextPlaylists = new HashSet<IPlaylist>(playlists.Where(playlist => playlist != null));
+
+            foreach (var playlist in observedPlaylists.Where(playlist => !nextPlaylists.Contains(playlist)).ToArray())
+            {
+                playlist.PlaylistChanged -= UpdatePlaylist;
+                observedPlaylists.Remove(playlist);
+            }
+
+            foreach (var playlist in nextPlaylists)
+            {
+                playlist.PlaylistChanged -= UpdatePlaylist;
+                playlist.PlaylistChanged += UpdatePlaylist;
+                observedPlaylists.Add(playlist);
             }
         }
 
@@ -104,6 +157,7 @@ namespace PlaylistManager.UI
             annotatedBeatmapLevelCollections[i] = playlistLevelPack;
             _annotatedBeatmapLevelCollectionsViewController._annotatedBeatmapLevelCollections = annotatedBeatmapLevelCollections;
             _annotatedBeatmapLevelCollectionsViewController._annotatedBeatmapLevelCollectionsGridView._annotatedBeatmapLevelCollections = annotatedBeatmapLevelCollections;
+            PlaylistPackRefreshed?.Invoke(playlistLevelPack);
 
             var gridView = _annotatedBeatmapLevelCollectionsViewController._annotatedBeatmapLevelCollectionsGridView._gridView;
             var cellWidth = gridView._dataSource.cellWidth;

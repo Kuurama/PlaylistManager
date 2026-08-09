@@ -33,6 +33,7 @@ namespace PlaylistManager.UI
         private readonly Loader loader;
         private readonly PluginMetadata pluginMetadata;
         private readonly BSMLParser bsmlParser;
+        private readonly FoldersViewController foldersViewController;
 
         private IPlaylist selectedPlaylist;
         private BeatSaberPlaylistsLib.PlaylistManager parentManager;
@@ -49,7 +50,8 @@ namespace PlaylistManager.UI
         private readonly Transform syncButtonTransform;
 
         internal PlaylistDetailViewButtonsController(IHttpService siraHttpService, PlaylistSequentialDownloader playlistDownloader, LevelPackDetailViewController levelPackDetailViewController,
-            PopupModalsController popupModalsController, PlaylistDetailsViewController playlistDetailsViewController, AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController, Loader loader, UBinder<Plugin, PluginMetadata> pluginMetadata, BSMLParser bsmlParser)
+            PopupModalsController popupModalsController, PlaylistDetailsViewController playlistDetailsViewController, AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController, Loader loader, UBinder<Plugin, PluginMetadata> pluginMetadata, BSMLParser bsmlParser,
+            [InjectOptional] FoldersViewController foldersViewController)
         {
             this.siraHttpService = siraHttpService;
             this.playlistDownloader = playlistDownloader;
@@ -60,6 +62,7 @@ namespace PlaylistManager.UI
             this.loader = loader;
             this.pluginMetadata = pluginMetadata.Value;
             this.bsmlParser = bsmlParser;
+            this.foldersViewController = foldersViewController;
         }
 
         public void Initialize()
@@ -136,7 +139,13 @@ namespace PlaylistManager.UI
 
         private void DeletePlaylist()
         {
-            parentManager.DeletePlaylist(selectedPlaylist, true);
+            var deletedPlaylist = selectedPlaylist;
+            parentManager.DeletePlaylist(deletedPlaylist, true);
+            if (foldersViewController?.RemoveVisiblePlaylist(deletedPlaylist) == true)
+            {
+                return;
+            }
+
             var selectedIndex = annotatedBeatmapLevelCollectionsViewController.selectedItemIndex;
             var annotatedBeatmapLevelCollections = annotatedBeatmapLevelCollectionsViewController._annotatedBeatmapLevelCollections.ToList();
             annotatedBeatmapLevelCollections.RemoveAt(selectedIndex);

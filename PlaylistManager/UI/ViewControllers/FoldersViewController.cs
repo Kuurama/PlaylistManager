@@ -1,512 +1,822 @@
-﻿using BeatSaberMarkupLanguage;
-using BeatSaberMarkupLanguage.Attributes;
-using BeatSaberMarkupLanguage.Components;
-using BeatSaberMarkupLanguage.FloatingScreen;
-using HMUI;
-using PlaylistManager.HarmonyPatches;
+﻿using BeatSaberPlaylistsLib.Types;
 using PlaylistManager.Interfaces;
+using PlaylistManager.Types;
 using PlaylistManager.Utilities;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
-using IPA.Loader;
-using PlaylistManager.Types;
-using SiraUtil.Zenject;
 using UnityEngine;
-using UnityEngine.UI;
 using Zenject;
 
 namespace PlaylistManager.UI
 {
-    public class FoldersViewController : IInitializable, IDisposable, INotifyPropertyChanged, ILevelCollectionsTableUpdater, ILevelCategoryUpdater, IPMRefreshable, TableView.IDataSource
+    /// <summary>
+    /// Builds the playlist grid for one directory at a time.
+    ///
+    /// Folder entries are represented by <see cref="FolderLevelPack"/> instances so they can
+    /// live alongside playlists in Beat Saber's native pack grid. The actual folder click is
+    /// consumed by <c>FolderNavigationPatches</c> before the game treats it like a song pack.
+    /// </summary>
+    public class FoldersViewController : IInitializable, IDisposable, ILevelCollectionsTableUpdater, IPMRefreshable, ILevelCategoryUpdater
     {
+        private const string FolderCoverFileName = "cover.png";
+        private const long MaxFolderCoverBytes = 16 * 1024 * 1024;
+        private static readonly TimeSpan PendingDeletionTimeout = TimeSpan.FromSeconds(30);
+
         private readonly AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController;
-        private readonly MainFlowCoordinator mainFlowCoordinator;
-        private readonly LevelSelectionNavigationController levelSelectionNavigationController;
-        private readonly PopupModalsController popupModalsController;
-        private readonly HoverHintController hoverHintController;
-        private readonly BeatmapLevelsModel beatmapLevelsModel;
+        private readonly SelectLevelCategoryViewController selectLevelCategoryViewController;
         private readonly PlaylistUpdater playlistUpdater;
-        private readonly PluginMetadata pluginMetadata;
-        private readonly BSMLParser bsmlParser;
+        private readonly Dictionary<string, FolderCover> folderCovers = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<IPlaylist, BeatSaberPlaylistsLib.PlaylistManager> visiblePlaylistParents = new();
+        private readonly Dictionary<string, DateTime> pendingDeletedPlaylistPaths = new(StringComparer.OrdinalIgnoreCase);
 
-        private FloatingScreen floatingScreen;
-        private Sprite levelPacksSprite;
-        private Sprite customPacksSprite;
-        private Sprite playlistsSprite;
-        private Sprite foldersSprite;
+        private IReadOnlyList<BeatmapLevelPack> rootPacks = Array.Empty<BeatmapLevelPack>();
+        private IReadOnlyList<BeatmapLevelPack> currentPacks = Array.Empty<BeatmapLevelPack>();
+        private BeatSaberPlaylistsLib.PlaylistManager _currentParentManager;
         private Sprite folderIcon;
+        private Sprite backIcon;
+        private int navigationGeneration;
+        private bool disposed;
 
-        public event PropertyChangedEventHandler PropertyChanged;
         public event Action<IReadOnlyList<BeatmapLevelPack>, int> LevelCollectionTableViewUpdatedEvent;
         public event Action<BeatSaberPlaylistsLib.PlaylistManager> ParentManagerUpdatedEvent;
-
-        private readonly List<CustomListTableData.CustomCellInfo> tableCells;
-        private BeatSaberPlaylistsLib.PlaylistManager _currentParentManager;
-        private List<BeatSaberPlaylistsLib.PlaylistManager> currentManagers;
-        private FolderMode folderMode;
 
         public BeatSaberPlaylistsLib.PlaylistManager CurrentParentManager
         {
             get => _currentParentManager;
             private set
             {
+                if (_currentParentManager == value)
+                {
+                    return;
+                }
+
                 _currentParentManager = value;
                 ParentManagerUpdatedEvent?.Invoke(value);
             }
         }
 
-        [UIComponent("root")]
-        private RectTransform rootTransform;
-
-        [UIComponent("back-rect")]
-        private RectTransform backTransform;
-
-        [UIComponent("rename-button")]
-        private Button renameButton;
-
-        [UIComponent("delete-button")]
-        private Button deleteButton;
-
-        [UIComponent("folder-list")]
-        public CustomListTableData customListTableData;
-
-        private FoldersViewController(AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController, MainFlowCoordinator mainFlowCoordinator,
-            LevelSelectionNavigationController levelSelectionNavigationController, PopupModalsController popupModalsController, HoverHintController hoverHintController,
-            BeatmapLevelsModel beatmapLevelsModel, PlaylistUpdater playlistUpdater, UBinder<Plugin, PluginMetadata> pluginMetadata, BSMLParser bsmlParser)
+        private FoldersViewController(
+            AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController,
+            SelectLevelCategoryViewController selectLevelCategoryViewController,
+            PlaylistUpdater playlistUpdater)
         {
             this.annotatedBeatmapLevelCollectionsViewController = annotatedBeatmapLevelCollectionsViewController;
-            this.mainFlowCoordinator = mainFlowCoordinator;
-            this.levelSelectionNavigationController = levelSelectionNavigationController;
-            this.popupModalsController = popupModalsController;
-            this.hoverHintController = hoverHintController;
-            this.beatmapLevelsModel = beatmapLevelsModel;
+            this.selectLevelCategoryViewController = selectLevelCategoryViewController;
             this.playlistUpdater = playlistUpdater;
-            this.pluginMetadata = pluginMetadata.Value;
-            this.bsmlParser = bsmlParser;
-
-            tableCells = new List<CustomListTableData.CustomCellInfo>();
-            folderMode = FolderMode.None;
         }
 
         public async void Initialize()
         {
-            levelPacksSprite = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync("PlaylistManager.Icons.LevelPacks.png");
-            customPacksSprite = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync("PlaylistManager.Icons.CustomPacks.png");
-            playlistsSprite = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync("PlaylistManager.Icons.Playlists.png");
-            foldersSprite = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync("PlaylistManager.Icons.Folders.png");
-            folderIcon = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync("PlaylistManager.Icons.FolderIcon.png");
-            
-            floatingScreen = FloatingScreen.CreateFloatingScreen(new Vector2(75, 25), false, new Vector3(0f, 0.2f, 2.5f), new Quaternion(0, 0, 0, 0));
-            var transform = floatingScreen.transform;
-            transform.eulerAngles = new Vector3(60, 0, 0);
-            transform.localScale = new Vector3(0.03f, 0.03f, 0.03f);
+            playlistUpdater.PlaylistPackRefreshed += HandlePlaylistPackRefreshed;
+            backIcon = CreateBackIcon();
+            try
+            {
+                folderIcon = await BeatSaberMarkupLanguage.Utilities.LoadSpriteFromAssemblyAsync("PlaylistManager.Icons.FolderIcon.png");
+            }
+            catch (Exception exception)
+            {
+                Plugin.Log.Warn($"Could not load the default folder icon: {exception.Message}");
+            }
 
-            bsmlParser.Parse(BeatSaberMarkupLanguage.Utilities.GetResourceContent(pluginMetadata.Assembly, "PlaylistManager.UI.Views.FoldersView.bsml"), floatingScreen.gameObject, this);
-            LevelFilteringNavigationController_ShowPacksInChildController.AllPacksViewSelectedEvent += LevelFilteringNavigationController_ShowPacksInChildController_AllPacksViewSelectedEvent;
+            if (disposed)
+            {
+                if (folderIcon != null)
+                {
+                    DestroyFolderCover(folderIcon);
+                    folderIcon = null;
+                }
+
+                return;
+            }
+
+            // The grid can be opened while this embedded image is still loading. Update its
+            // folder cells without disturbing the selected playlist or song.
+            if (!disposed && CurrentParentManager != null && IsCustomSongsViewActive() && IsCurrentDirectoryDisplayed())
+            {
+                RefreshVisibleFolderTilesInPlace();
+            }
         }
 
         public void Dispose()
         {
-            LevelFilteringNavigationController_ShowPacksInChildController.AllPacksViewSelectedEvent -= LevelFilteringNavigationController_ShowPacksInChildController_AllPacksViewSelectedEvent;
-        }
+            disposed = true;
+            navigationGeneration++;
+            playlistUpdater.PlaylistPackRefreshed -= HandlePlaylistPackRefreshed;
 
-        [UIAction("#post-parse")]
-        private void PostParse()
-        {
-            var gameObject = rootTransform.gameObject;
-            gameObject.SetActive(false);
-            gameObject.name = "PlaylistManagerFoldersView";
-            customListTableData.TableView.SetDataSource(this, false);
-        }
-
-        public void SetupDimensions()
-        {
-            if (!(mainFlowCoordinator.YoungestChildFlowCoordinatorOrSelf() is MultiplayerLevelSelectionFlowCoordinator))
+            foreach (var cover in folderCovers.Values)
             {
-                var transform = floatingScreen.transform;
-                transform.position = new Vector3(0f, 0.1f, 2.5f);
-                transform.eulerAngles = new Vector3(75, 0, 0);
-                transform.localScale = new Vector3(0.03f, 0.03f, 0.03f);
+                if (cover.Sprite != null)
+                {
+                    DestroyFolderCover(cover.Sprite);
+                }
             }
-            else
+
+            folderCovers.Clear();
+            pendingDeletedPlaylistPaths.Clear();
+
+            if (folderIcon != null)
             {
-                var foldersPosition = levelSelectionNavigationController.transform.position;
-                foldersPosition.y += 0.73f;
-                var transform = floatingScreen.transform;
-                transform.eulerAngles = new Vector3(0, 0, 0);
-                transform.localScale = new Vector3(0.015f, 0.015f, 0.015f);
-                transform.position = foldersPosition;
+                DestroyFolderCover(folderIcon);
+                folderIcon = null;
+            }
+
+            if (backIcon != null)
+            {
+                DestroyFolderCover(backIcon);
+                backIcon = null;
             }
         }
-
-        private void SetupList(BeatSaberPlaylistsLib.PlaylistManager currentParentManager, bool setBeatmapLevelCollections = true)
-        {
-            customListTableData.TableView.ClearSelection();
-            tableCells.Clear();
-            CurrentParentManager = currentParentManager;
-
-            if (currentParentManager == null)
-            {
-                var customCellInfo = new CustomListTableData.CustomCellInfo("","Level Packs", levelPacksSprite);
-                tableCells.Add(customCellInfo);
-
-                customCellInfo = new CustomListTableData.CustomCellInfo("","Custom Songs", customPacksSprite);
-                tableCells.Add(customCellInfo);
-
-                customCellInfo = new CustomListTableData.CustomCellInfo("","Playlists", playlistsSprite);
-                tableCells.Add(customCellInfo);
-
-                customCellInfo = new CustomListTableData.CustomCellInfo("","Folders", foldersSprite);
-                tableCells.Add(customCellInfo);
-
-                backTransform.gameObject.SetActive(false);
-            }
-            else
-            {
-                currentManagers = currentParentManager.GetChildManagers().ToList();
-                foreach (var childManager in currentManagers)
-                {
-                    var folderName = Path.GetFileName(childManager.PlaylistPath);
-                    var customCellInfo = new CustomListTableData.CustomCellInfo(folderName, icon: folderIcon);
-                    tableCells.Add(customCellInfo);
-                }
-
-                backTransform.gameObject.SetActive(true);
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FolderText)));
-
-                // If root, can't rename or delete
-                if (currentParentManager.Parent == null)
-                {
-                    renameButton.interactable = false;
-                    deleteButton.interactable = false;
-                }
-                else
-                {
-                    renameButton.interactable = true;
-                    deleteButton.interactable = true;
-                }
-
-                if (setBeatmapLevelCollections)
-                {
-                    IReadOnlyList<BeatmapLevelPack> annotatedBeatmapLevelCollections = currentParentManager.GetAllPlaylists(false).Select(p => p.PlaylistLevelPack).ToArray();
-                    LevelCollectionTableViewUpdatedEvent?.Invoke(annotatedBeatmapLevelCollections, 0);
-                }
-            }
-
-            customListTableData.TableView.ReloadData();
-            customListTableData.TableView.ScrollToCellWithIdx(0, TableView.ScrollPositionType.Beginning, false);
-            if (currentParentManager == null)
-            {
-                customListTableData.TableView.SelectCellWithIdx(0);
-
-                // Add hover hint
-                var visibleCells = customListTableData.TableView.visibleCells.ToArray();
-                for (var i = 0; i < visibleCells.Length; i++)
-                {
-                    var hoverHint = visibleCells[i].GetComponent<HoverHint>();
-                    if (hoverHint == null)
-                    {
-                        hoverHint = visibleCells[i].gameObject.AddComponent<HoverHint>();
-                        Accessors.HoverHintControllerAccessor(ref hoverHint) = hoverHintController;
-                    }
-                    else
-                    {
-                        hoverHint.enabled = true;
-                    }
-                    hoverHint.text = tableCells[i].Subtext;
-                }
-
-                if (setBeatmapLevelCollections)
-                {
-                    Select(customListTableData.TableView, 0);
-                }
-            }
-            else
-            {
-                // Disable hover hint
-                var visibleCells = customListTableData.TableView.visibleCells.ToArray();
-                for (var i = 0; i < visibleCells.Length; i++)
-                {
-                    var hoverHint = visibleCells[i].GetComponent<HoverHint>();
-                    if (hoverHint != null)
-                    {
-                        hoverHint.enabled = false;
-                    }
-                }
-            }
-
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LeftButtonEnabled)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RightButtonEnabled)));
-        }
-
-        [UIAction("folder-select")]
-        private void Select(TableView _, int selectedCellIndex)
-        {
-            if (CurrentParentManager == null) // If we are at root
-            {
-                if (selectedCellIndex == 0)
-                {
-                    IReadOnlyList<BeatmapLevelPack> annotatedBeatmapLevelCollections = beatmapLevelsModel._customLevelsRepository.beatmapLevelPacks.Concat(PlaylistLibUtils.TryGetAllPlaylistsAsLevelPacks()).ToArray();
-                    LevelCollectionTableViewUpdatedEvent?.Invoke(annotatedBeatmapLevelCollections, 0);
-                    folderMode = FolderMode.AllPacks;
-
-                }
-                else if (selectedCellIndex == 1)
-                {
-                    IReadOnlyList<BeatmapLevelPack> annotatedBeatmapLevelCollections = beatmapLevelsModel._customLevelsRepository.beatmapLevelPacks;
-                    LevelCollectionTableViewUpdatedEvent?.Invoke(annotatedBeatmapLevelCollections, 0);
-                    folderMode = FolderMode.CustomPacks;
-                }
-                else if (selectedCellIndex == 2)
-                {
-                    IReadOnlyList<BeatmapLevelPack> annotatedBeatmapLevelCollections = PlaylistLibUtils.TryGetAllPlaylistsAsLevelPacks();
-                    LevelCollectionTableViewUpdatedEvent?.Invoke(annotatedBeatmapLevelCollections, 0);
-                    folderMode = FolderMode.Playlists;
-                }
-                else if (selectedCellIndex == 3)
-                {
-                    SetupList(PlaylistLibUtils.playlistManager);
-                    folderMode = FolderMode.Folders;
-                }
-            }
-            else
-            {
-                SetupList(currentManagers[selectedCellIndex]);
-            }
-        }
-
-        [UIAction("back-button-click")]
-        private void BackButtonClicked()
-        {
-            if (CurrentParentManager == null)
-            {
-                return;
-            }
-            SetupList(currentParentManager: CurrentParentManager.Parent);
-        }
-
-        #region Create Folder
-
-        [UIAction("create-folder")]
-        private void CreateFolder()
-        {
-            popupModalsController.ShowKeyboard(levelSelectionNavigationController.transform, CreateKeyboardEnter);
-        }
-
-        private void CreateKeyboardEnter(string folderName)
-        {
-            if (CurrentParentManager == null)
-            {
-                return;
-            }
-
-            folderName = folderName.Replace("/", "").Replace("\\", "").Replace(".", "");
-            if (!string.IsNullOrEmpty(folderName))
-            {
-                var childManager = CurrentParentManager.CreateChildManager(folderName);
-
-                if (currentManagers.Contains(childManager))
-                {
-                    popupModalsController.ShowOkModal(levelSelectionNavigationController.transform, "\"" + folderName + "\" already exists! Please use a different name.", null);
-                }
-                else
-                {
-                    var customCellInfo = new CustomListTableData.CustomCellInfo(folderName, icon: BeatSaberMarkupLanguage.Utilities.ImageResources.BlankSprite);
-                    tableCells.Add(customCellInfo);
-                    customListTableData.TableView.ReloadData();
-                    customListTableData.TableView.ClearSelection();
-                    currentManagers.Add(childManager);
-                }
-            }
-        }
-
-        #endregion
-
-        #region Rename Folder
-
-        [UIAction("rename-folder")]
-        private void RenameButtonClicked()
-        {
-            popupModalsController.ShowKeyboard(levelSelectionNavigationController.transform, RenameKeyboardEnter, keyboardText: Path.GetFileName(CurrentParentManager.PlaylistPath));
-        }
-
-        private void RenameKeyboardEnter(string folderName)
-        {
-            if (CurrentParentManager?.Parent == null)
-            {
-                return;
-            }
-
-            folderName = folderName.Replace("/", "").Replace("\\", "").Replace(".", "");
-            if (!string.IsNullOrEmpty(folderName))
-            {
-                if (folderName != Path.GetFileName(CurrentParentManager.PlaylistPath))
-                {
-                    CurrentParentManager.RenameManager(folderName);
-                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FolderText)));
-                }
-            }
-        }
-
-        #endregion
-
-        #region Delete Folder
-
-        [UIAction("delete-folder")]
-        private void DeleteButtonClicked()
-        {
-            popupModalsController.ShowYesNoModal(levelSelectionNavigationController.transform, string.Format("Are you sure you want to delete {0} along with all playlists and subfolders?", Path.GetFileName(CurrentParentManager.PlaylistPath)), DeleteConfirm);
-        }
-
-        private void DeleteConfirm()
-        {
-            CurrentParentManager?.Parent?.DeleteChildManager(CurrentParentManager, true);
-            BackButtonClicked();
-        }
-
-        #endregion
 
         public void LevelCategoryUpdated(SelectLevelCategoryViewController.LevelCategory levelCategory, bool viewControllerActivated)
         {
-            if (rootTransform == null)
+            if (levelCategory != SelectLevelCategoryViewController.LevelCategory.CustomSongs)
             {
-                return;
-            }
-
-            if (levelCategory == SelectLevelCategoryViewController.LevelCategory.CustomSongs)
-            {
-                rootTransform.gameObject.SetActive(true);
-                SetupDimensions();
-                if (viewControllerActivated)
-                {
-                    SetupList(CurrentParentManager, false);
-                }
-            }
-            else
-            {
-                rootTransform.gameObject.SetActive(false);
+                // Invalidate cover continuations before the shared pack grid starts showing
+                // Music Packs or another category.
+                navigationGeneration++;
             }
         }
 
-        private void LevelFilteringNavigationController_ShowPacksInChildController_AllPacksViewSelectedEvent()
+        /// <summary>
+        /// Called while Beat Saber is about to display the Custom Songs pack grid.
+        /// Keeps the game's own custom packs, but replaces the recursively injected playlist
+        /// section with the direct contents of the root Playlists directory.
+        /// </summary>
+        internal IReadOnlyList<BeatmapLevelPack> OpenRoot(
+            IReadOnlyList<BeatmapLevelPack> originalPacks,
+            string requestedPackId,
+            out string packIdToSelect)
         {
-            SetupList(null, false);
-            folderMode = FolderMode.AllPacks;
+            var currentDirectoryIsDisplayed = CurrentParentManager != null
+                && annotatedBeatmapLevelCollectionsViewController.isActiveAndEnabled
+                && IsCurrentDirectoryDisplayed();
+            packIdToSelect = !string.IsNullOrEmpty(requestedPackId)
+                ? requestedPackId
+                : currentDirectoryIsDisplayed
+                    ? GetSelectedPackId()
+                    : null;
+            var requestedPackIsInCurrentDirectory = !string.IsNullOrEmpty(requestedPackId)
+                && currentPacks.Any(pack => pack?.packID == requestedPackId);
+            var keepCurrentDirectory = CurrentParentManager?.Parent != null
+                && currentDirectoryIsDisplayed
+                && (string.IsNullOrEmpty(requestedPackId) || requestedPackIsInCurrentDirectory);
+
+            rootPacks = (originalPacks ?? Array.Empty<BeatmapLevelPack>())
+                .Where(pack => pack is not PlaylistLevelPack && pack is not FolderLevelPack)
+                .ToArray();
+
+            if (!keepCurrentDirectory)
+            {
+                CurrentParentManager = PlaylistLibUtils.playlistManager;
+            }
+
+            currentPacks = BuildCurrentDirectoryPacks();
+            var desiredPackId = packIdToSelect;
+            if (string.IsNullOrEmpty(desiredPackId)
+                || !currentPacks.Any(pack => pack is not FolderLevelPack && pack.packID == desiredPackId))
+            {
+                packIdToSelect = currentPacks.FirstOrDefault(pack => pack is not FolderLevelPack)?.packID;
+            }
+
+            StartLoadingVisibleFolderCovers();
+            return currentPacks;
+        }
+
+        internal void NormalizeSelectionAfterNativeShow()
+        {
+            if (currentPacks.Count > 0 && currentPacks.All(pack => pack is FolderLevelPack))
+            {
+                LevelCollectionTableViewUpdatedEvent?.Invoke(currentPacks, -1);
+            }
+        }
+
+        /// <summary>
+        /// Consumes a folder tile and publishes the target directory into the native grid.
+        /// </summary>
+        internal bool TryOpenFolder(FolderLevelPack folderLevelPack)
+        {
+            if (folderLevelPack?.TargetManager == null)
+            {
+                return false;
+            }
+
+            CurrentParentManager = folderLevelPack.TargetManager;
+            PublishCurrentDirectory();
+            return true;
+        }
+
+        internal bool TryGetVisibleParent(IPlaylist playlist, out BeatSaberPlaylistsLib.PlaylistManager manager)
+            => visiblePlaylistParents.TryGetValue(playlist, out manager);
+
+        /// <summary>
+        /// Removes a just-deleted playlist without immediately re-reading the file that the
+        /// playlist library is still moving to the recycle bin on a worker thread.
+        /// </summary>
+        internal bool RemoveVisiblePlaylist(IPlaylist playlist)
+        {
+            if (disposed || playlist == null || !IsCustomSongsViewActive())
+            {
+                return false;
+            }
+
+            var removedIndex = -1;
+            for (var i = 0; i < currentPacks.Count; i++)
+            {
+                if (currentPacks[i] is PlaylistLevelPack playlistLevelPack && ReferenceEquals(playlistLevelPack.playlist, playlist))
+                {
+                    removedIndex = i;
+                    break;
+                }
+            }
+
+            if (removedIndex < 0)
+            {
+                return false;
+            }
+
+            var playlistManager = visiblePlaylistParents.TryGetValue(playlist, out var visibleParent)
+                ? visibleParent
+                : CurrentParentManager;
+            var deletedPlaylistPath = GetPlaylistFilePath(playlistManager, playlist);
+            if (!string.IsNullOrEmpty(deletedPlaylistPath))
+            {
+                pendingDeletedPlaylistPaths[deletedPlaylistPath] = DateTime.UtcNow;
+            }
+
+            var remainingPacks = currentPacks.Where((_, index) => index != removedIndex).ToArray();
+            currentPacks = remainingPacks;
+            visiblePlaylistParents.Remove(playlist);
+            playlistUpdater.ShowOnlyPlaylistChangedListeners(remainingPacks);
+
+            var preferredPackId = remainingPacks
+                .Take(Math.Min(removedIndex, remainingPacks.Length))
+                .LastOrDefault(pack => pack is not FolderLevelPack)?.packID
+                ?? remainingPacks.Skip(Math.Min(removedIndex, remainingPacks.Length))
+                    .FirstOrDefault(pack => pack is not FolderLevelPack)?.packID;
+
+            LevelCollectionTableViewUpdatedEvent?.Invoke(remainingPacks, FindSelectableIndex(remainingPacks, preferredPackId));
+            return true;
+        }
+
+        /// <summary>
+        /// Refreshes the current manager cache, discovers new direct files, and republishes
+        /// the grid only when Custom Songs is still the active category.
+        /// </summary>
+        internal int RefreshCurrentDirectoryFromDisk()
+        {
+            var manager = EnsureExistingManager();
+            SynchronizeDirectChildManagers(manager);
+            PruneCompletedPendingDeletions();
+            var directPlaylistCount = PlaylistLibUtils.RefreshDirectPlaylists(manager)
+                .Count(playlist => !IsPlaylistPendingDeletion(manager, playlist));
+            if (IsCustomSongsViewActive())
+            {
+                Refresh();
+            }
+
+            return directPlaylistCount;
         }
 
         public void Refresh()
         {
-            if (!rootTransform.gameObject.activeInHierarchy)
+            Refresh(GetSelectedPackId());
+        }
+
+        internal void Refresh(string preferredPackId)
+        {
+            if (disposed || CurrentParentManager == null || !IsCustomSongsViewActive())
             {
                 return;
             }
 
-            if (folderMode == FolderMode.AllPacks)
+            PublishCurrentDirectory(preferredPackId);
+        }
+
+        private void PublishCurrentDirectory(string preferredPackId = null)
+        {
+            currentPacks = BuildCurrentDirectoryPacks();
+            var selectedIndex = FindSelectableIndex(currentPacks, preferredPackId);
+            LevelCollectionTableViewUpdatedEvent?.Invoke(currentPacks, selectedIndex);
+            StartLoadingVisibleFolderCovers();
+        }
+
+        private IReadOnlyList<BeatmapLevelPack> BuildCurrentDirectoryPacks()
+        {
+            var manager = EnsureExistingManager();
+            SynchronizeDirectChildManagers(manager);
+            PruneCompletedPendingDeletions();
+            var packs = new List<BeatmapLevelPack>();
+
+            if (manager.Parent == null)
             {
-                var playlistLevelPacks = PlaylistLibUtils.TryGetAllPlaylistsAsLevelPacks();
-                playlistUpdater.RefreshPlaylistChangedListeners(playlistLevelPacks);
-                var annotatedBeatmapLevelCollections = beatmapLevelsModel._customLevelsRepository.beatmapLevelPacks.Concat(playlistLevelPacks).ToArray();
-                var indexToSelect = Array.FindIndex(annotatedBeatmapLevelCollections, (pack) => pack.packID == annotatedBeatmapLevelCollectionsViewController.selectedAnnotatedBeatmapLevelPack.packID);
-                if (indexToSelect != -1)
-                {
-                    annotatedBeatmapLevelCollectionsViewController.SetData(annotatedBeatmapLevelCollections, indexToSelect, false);
-                }
+                packs.AddRange(rootPacks);
             }
-            else if (folderMode == FolderMode.Playlists)
+            else
             {
-                var annotatedBeatmapLevelCollections = PlaylistLibUtils.TryGetAllPlaylistsAsLevelPacks();
-                playlistUpdater.RefreshPlaylistChangedListeners(annotatedBeatmapLevelCollections);
-                var indexToSelect = Array.FindIndex(annotatedBeatmapLevelCollections, (pack) => pack.packID == annotatedBeatmapLevelCollectionsViewController.selectedAnnotatedBeatmapLevelPack.packID);
-                if (indexToSelect != -1)
-                {
-                    annotatedBeatmapLevelCollectionsViewController.SetData(annotatedBeatmapLevelCollections, indexToSelect, false);
-                }
+                packs.Add(new FolderLevelPack(manager.Parent, GetBackSprite(), true));
             }
-            else if (folderMode == FolderMode.Folders)
+
+            var childManagers = manager.GetChildManagers()
+                .Where(child => child != null && Directory.Exists(child.PlaylistPath) && !HasPlaylistIgnoreFile(child.PlaylistPath))
+                .OrderBy(child => Path.GetFileName(child.PlaylistPath), StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            foreach (var childManager in childManagers)
             {
-                var annotatedBeatmapLevelCollections = CurrentParentManager.GetAllPlaylists(false).Select(p => p.PlaylistLevelPack).ToArray();
-                playlistUpdater.RefreshPlaylistChangedListeners(annotatedBeatmapLevelCollections);
-                var indexToSelect = Array.FindIndex(annotatedBeatmapLevelCollections, (pack) => pack.packID == annotatedBeatmapLevelCollectionsViewController.selectedAnnotatedBeatmapLevelPack.packID);
-                if (indexToSelect != -1)
+                packs.Add(new FolderLevelPack(
+                    childManager,
+                    GetFolderSprite(childManager),
+                    showNameOnCover: !HasLoadedCustomCover(childManager)));
+            }
+
+            var visiblePlaylists = PlaylistLibUtils.TryGetDirectPlaylists(manager)
+                .Where(playlist => playlist != null && !IsPlaylistPendingDeletion(manager, playlist))
+                .Distinct()
+                .ToArray();
+
+            visiblePlaylistParents.Clear();
+            foreach (var playlist in visiblePlaylists)
+            {
+                visiblePlaylistParents[playlist] = manager;
+            }
+
+            var playlistPacks = visiblePlaylists
+                .Select(playlist => (BeatmapLevelPack)playlist.PlaylistLevelPack)
+                .ToArray();
+
+            playlistUpdater.ShowOnlyPlaylistChangedListeners(playlistPacks);
+            packs.AddRange(playlistPacks);
+            return packs;
+        }
+
+        private BeatSaberPlaylistsLib.PlaylistManager EnsureExistingManager()
+        {
+            var manager = CurrentParentManager ?? PlaylistLibUtils.playlistManager;
+            while (manager.Parent != null && !Directory.Exists(manager.PlaylistPath))
+            {
+                manager = manager.Parent;
+            }
+
+            CurrentParentManager = manager;
+            return manager;
+        }
+
+        private static string GetPlaylistFilePath(BeatSaberPlaylistsLib.PlaylistManager manager, IPlaylist playlist)
+        {
+            if (manager == null || playlist == null || string.IsNullOrEmpty(playlist.Filename))
+            {
+                return null;
+            }
+
+            var extension = string.IsNullOrWhiteSpace(playlist.SuggestedExtension)
+                ? manager.DefaultHandler?.DefaultExtension
+                : playlist.SuggestedExtension;
+            if (string.IsNullOrWhiteSpace(extension))
+            {
+                return null;
+            }
+
+            return Path.Combine(manager.PlaylistPath, $"{playlist.Filename}.{extension.TrimStart('.')}");
+        }
+
+        private bool IsPlaylistPendingDeletion(BeatSaberPlaylistsLib.PlaylistManager manager, IPlaylist playlist)
+        {
+            var playlistPath = GetPlaylistFilePath(manager, playlist);
+            return playlistPath != null && pendingDeletedPlaylistPaths.ContainsKey(playlistPath);
+        }
+
+        private void PruneCompletedPendingDeletions()
+        {
+            var now = DateTime.UtcNow;
+            foreach (var pendingDeletion in pendingDeletedPlaylistPaths.ToArray())
+            {
+                if (!File.Exists(pendingDeletion.Key) || now - pendingDeletion.Value >= PendingDeletionTimeout)
                 {
-                    annotatedBeatmapLevelCollectionsViewController.SetData(annotatedBeatmapLevelCollections, indexToSelect, false);
+                    pendingDeletedPlaylistPaths.Remove(pendingDeletion.Key);
                 }
-                SetupList(CurrentParentManager, false);
             }
         }
 
-        [UIValue("folder-text")]
-        private string FolderText
+        private void SynchronizeDirectChildManagers(BeatSaberPlaylistsLib.PlaylistManager manager)
         {
-            get
+            string[] directDirectories;
+            try
             {
-                if (CurrentParentManager == null || !Directory.Exists(CurrentParentManager.PlaylistPath))
+                directDirectories = Directory.GetDirectories(manager.PlaylistPath, "*", SearchOption.TopDirectoryOnly);
+            }
+            catch (Exception exception)
+            {
+                Plugin.Log.Warn($"Could not enumerate playlist folders in '{manager.PlaylistPath}': {exception.Message}");
+                return;
+            }
+
+            var existingPaths = new HashSet<string>(
+                manager.GetChildManagers().Select(child => Path.GetFullPath(child.PlaylistPath)),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var directoryPath in directDirectories)
+            {
+                if (HasPlaylistIgnoreFile(directoryPath) || existingPaths.Contains(Path.GetFullPath(directoryPath)))
                 {
-                    return "";
+                    continue;
                 }
-                else
+
+                try
                 {
-                    var folderName = Path.GetFileName(CurrentParentManager.PlaylistPath);
-                    if (folderName.Length > 15)
+                    manager.CreateChildManager(Path.GetFileName(directoryPath));
+                    existingPaths.Add(Path.GetFullPath(directoryPath));
+                }
+                catch (Exception exception)
+                {
+                    Plugin.Log.Warn($"Could not register playlist folder '{directoryPath}': {exception.Message}");
+                }
+            }
+        }
+
+        private static bool HasPlaylistIgnoreFile(string directoryPath)
+        {
+            try
+            {
+                return Directory.EnumerateFiles(directoryPath, "*.plignore", SearchOption.TopDirectoryOnly).Any();
+            }
+            catch
+            {
+                // An inaccessible directory should not become an unusable folder tile.
+                return true;
+            }
+        }
+
+        private void HandlePlaylistPackRefreshed(BeatmapLevelPack refreshedPack)
+        {
+            if (refreshedPack == null || currentPacks.Count == 0)
+            {
+                return;
+            }
+
+            var replacementIndex = -1;
+            for (var i = 0; i < currentPacks.Count; i++)
+            {
+                if (currentPacks[i] is PlaylistLevelPack && currentPacks[i].packID == refreshedPack.packID)
+                {
+                    replacementIndex = i;
+                    break;
+                }
+            }
+
+            if (replacementIndex < 0)
+            {
+                return;
+            }
+
+            var refreshedPacks = currentPacks.ToArray();
+            refreshedPacks[replacementIndex] = refreshedPack;
+            currentPacks = refreshedPacks;
+
+            if (refreshedPack is PlaylistLevelPack playlistLevelPack && CurrentParentManager != null)
+            {
+                visiblePlaylistParents[playlistLevelPack.playlist] = CurrentParentManager;
+            }
+        }
+
+        private void RefreshVisibleFolderTilesInPlace()
+        {
+            if (!IsCustomSongsViewActive() || !IsCurrentDirectoryDisplayed())
+            {
+                return;
+            }
+
+            var refreshedPacks = currentPacks
+                .Select(pack => pack is FolderLevelPack folderLevelPack
+                    ? (BeatmapLevelPack)new FolderLevelPack(
+                        folderLevelPack.TargetManager,
+                        folderLevelPack.IsBack ? GetBackSprite() : GetFolderSprite(folderLevelPack.TargetManager),
+                        folderLevelPack.IsBack,
+                        !folderLevelPack.IsBack && !HasLoadedCustomCover(folderLevelPack.TargetManager))
+                    : pack)
+                .ToArray();
+
+            currentPacks = refreshedPacks;
+            annotatedBeatmapLevelCollectionsViewController._annotatedBeatmapLevelCollections = refreshedPacks;
+
+            var gridViewController = annotatedBeatmapLevelCollectionsViewController._annotatedBeatmapLevelCollectionsGridView;
+            gridViewController._annotatedBeatmapLevelCollections = refreshedPacks;
+            foreach (var component in gridViewController._gridView.cellsEnumerator)
+            {
+                if (component is not AnnotatedBeatmapLevelCollectionCell cell
+                    || cell.cellIndex < 0
+                    || cell.cellIndex >= refreshedPacks.Length
+                    || refreshedPacks[cell.cellIndex] is not FolderLevelPack refreshedFolder)
+                {
+                    continue;
+                }
+
+                // SetData also refreshes the optional name overlay when a cover.png has
+                // just finished loading (or disappeared and the fallback icon is restored).
+                cell.SetData(refreshedFolder, false, false, true);
+            }
+        }
+
+        private void StartLoadingVisibleFolderCovers()
+        {
+            var manager = CurrentParentManager;
+            if (manager == null)
+            {
+                return;
+            }
+
+            PruneFolderCoverCacheToVisibleFolders();
+            var generation = ++navigationGeneration;
+            _ = LoadVisibleFolderCoversAsync(manager, generation);
+        }
+
+        private void PruneFolderCoverCacheToVisibleFolders()
+        {
+            var visibleCoverPaths = new HashSet<string>(
+                currentPacks
+                    .OfType<FolderLevelPack>()
+                    .Where(folder => !folder.IsBack)
+                    .Select(folder => Path.Combine(folder.TargetManager.PlaylistPath, FolderCoverFileName)),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var coverPath in folderCovers.Keys.Where(path => !visibleCoverPaths.Contains(path)).ToArray())
+            {
+                RemoveCachedCover(coverPath);
+            }
+        }
+
+        private async Task LoadVisibleFolderCoversAsync(BeatSaberPlaylistsLib.PlaylistManager manager, int generation)
+        {
+            var changed = false;
+            BeatSaberPlaylistsLib.PlaylistManager[] childManagers;
+            try
+            {
+                childManagers = currentPacks
+                    .OfType<FolderLevelPack>()
+                    .Where(folder => !folder.IsBack)
+                    .Select(folder => folder.TargetManager)
+                    .Distinct()
+                    .ToArray();
+            }
+            catch (Exception exception)
+            {
+                Plugin.Log.Warn($"Could not enumerate playlist folders in '{manager.PlaylistPath}': {exception.Message}");
+                return;
+            }
+
+            foreach (var childManager in childManagers)
+            {
+                if (disposed || generation != navigationGeneration)
+                {
+                    return;
+                }
+
+                var coverPath = Path.Combine(childManager.PlaylistPath, FolderCoverFileName);
+                if (!File.Exists(coverPath))
+                {
+                    changed |= RemoveCachedCover(coverPath);
+                    continue;
+                }
+
+                DateTime lastWriteTimeUtc;
+                long fileLength;
+                try
+                {
+                    var fileInfo = new FileInfo(coverPath);
+                    lastWriteTimeUtc = fileInfo.LastWriteTimeUtc;
+                    fileLength = fileInfo.Length;
+                }
+                catch (Exception exception)
+                {
+                    Plugin.Log.Warn($"Could not inspect folder cover '{coverPath}': {exception.Message}");
+                    changed |= RemoveCachedCover(coverPath);
+                    continue;
+                }
+
+                if (fileLength > MaxFolderCoverBytes)
+                {
+                    Plugin.Log.Warn($"Folder cover '{coverPath}' is larger than {MaxFolderCoverBytes / (1024 * 1024)} MB. Using the default folder icon.");
+                    changed |= RemoveCachedCover(coverPath);
+                    continue;
+                }
+
+                if (folderCovers.TryGetValue(coverPath, out var cachedCover)
+                    && cachedCover.LastWriteTimeUtc == lastWriteTimeUtc
+                    && cachedCover.Length == fileLength)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    // Only cover.png files belonging to direct child folders are read here.
+                    // BSML performs the texture creation asynchronously for Unity.
+                    var imageData = await File.ReadAllBytesAsync(coverPath);
+                    if (disposed || generation != navigationGeneration || CurrentParentManager != manager)
                     {
-                        return folderName.Substring(0, 15) + "...";
+                        return;
                     }
-                    return folderName;
+
+                    var sprite = await BeatSaberMarkupLanguage.Utilities.LoadSpriteAsync(imageData);
+                    if (disposed || generation != navigationGeneration || CurrentParentManager != manager)
+                    {
+                        if (sprite != null)
+                        {
+                            DestroyFolderCover(sprite);
+                        }
+
+                        return;
+                    }
+
+                    if (sprite == null)
+                    {
+                        Plugin.Log.Warn($"Could not decode folder cover '{coverPath}'. Using the default folder icon.");
+                        changed |= RemoveCachedCover(coverPath);
+                        continue;
+                    }
+
+                    if (folderCovers.TryGetValue(coverPath, out cachedCover) && cachedCover.Sprite != null)
+                    {
+                        DestroyFolderCover(cachedCover.Sprite);
+                    }
+
+                    folderCovers[coverPath] = new FolderCover(sprite, lastWriteTimeUtc, fileLength);
+                    changed = true;
+                }
+                catch (Exception exception)
+                {
+                    Plugin.Log.Warn($"Could not load folder cover '{coverPath}': {exception.Message}");
+                    if (!disposed && generation == navigationGeneration && CurrentParentManager == manager)
+                    {
+                        changed |= RemoveCachedCover(coverPath);
+                    }
                 }
             }
-        }
 
-        [UIValue("left-button-enabled")]
-        private bool LeftButtonEnabled
-        {
-            get => customListTableData != null && tableCells.Count > 4;
-        }
-
-        [UIValue("right-button-enabled")]
-        private bool RightButtonEnabled
-        {
-            get => customListTableData != null && tableCells.Count > 4;
-        }
-
-        #region TableView DataSource
-
-        private const string kReuseIdentifier = "PlaylistFolderCell";
-
-        private FolderCell GetCell()
-        {
-            var tableCell = customListTableData.TableView.DequeueReusableCellForIdentifier(kReuseIdentifier);
-            FolderCell? folderCell = null;
-
-            if (tableCell == null)
+            if (changed
+                && !disposed
+                && generation == navigationGeneration
+                && CurrentParentManager == manager
+                && IsCustomSongsViewActive()
+                && IsCurrentDirectoryDisplayed())
             {
-                tableCell = customListTableData.GetBoxTableCell();
-                tableCell.reuseIdentifier = kReuseIdentifier;
-                folderCell = tableCell.gameObject.AddComponent<FolderCell>();
+                RefreshVisibleFolderTilesInPlace();
+            }
+        }
+
+        private Sprite GetFolderSprite(BeatSaberPlaylistsLib.PlaylistManager manager)
+        {
+            var coverPath = Path.Combine(manager.PlaylistPath, FolderCoverFileName);
+            return folderCovers.TryGetValue(coverPath, out var cover) && cover.Sprite != null
+                ? cover.Sprite
+                : GetFallbackFolderSprite();
+        }
+
+        private bool HasLoadedCustomCover(BeatSaberPlaylistsLib.PlaylistManager manager)
+        {
+            var coverPath = Path.Combine(manager.PlaylistPath, FolderCoverFileName);
+            return folderCovers.TryGetValue(coverPath, out var cover) && cover.Sprite != null;
+        }
+
+        private Sprite GetFallbackFolderSprite()
+            => folderIcon != null ? folderIcon : BeatSaberPlaylistsLib.Utilities.DefaultSprite;
+
+        private Sprite GetBackSprite()
+            => backIcon != null ? backIcon : GetFallbackFolderSprite();
+
+        private bool RemoveCachedCover(string coverPath)
+        {
+            if (!folderCovers.TryGetValue(coverPath, out var cachedCover))
+            {
+                return false;
             }
 
-            return folderCell ? folderCell : tableCell.GetComponent<FolderCell>();
+            folderCovers.Remove(coverPath);
+            if (cachedCover.Sprite != null)
+            {
+                DestroyFolderCover(cachedCover.Sprite);
+            }
+
+            return true;
         }
 
-        public float CellSize(int idx) => 15;
+        private static void DestroyFolderCover(Sprite sprite)
+        {
+            var texture = sprite.texture;
+            UnityEngine.Object.Destroy(sprite);
+            if (texture != null)
+            {
+                UnityEngine.Object.Destroy(texture);
+            }
+        }
 
-        public int NumberOfCells() => tableCells.Count;
+        private static Sprite CreateBackIcon()
+        {
+            const int size = 256;
+            const int center = size / 2;
+            var pixels = new Color32[size * size];
+            var white = new Color32(255, 255, 255, 255);
 
-        public TableCell CellForIdx(TableView tableView, int idx) => GetCell().PopulateCell(tableCells[idx].Icon, tableCells[idx].Text);
+            for (var y = 0; y < size; y++)
+            {
+                for (var x = 0; x < size; x++)
+                {
+                    var shaft = x >= 98 && x <= 212 && Math.Abs(y - center) <= 18;
+                    var arrowHead = x >= 44 && x <= 112 && Math.Abs(y - center) <= x - 44;
+                    if (shaft || arrowHead)
+                    {
+                        pixels[y * size + x] = white;
+                    }
+                }
+            }
 
-        #endregion
-    }
+            var texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            {
+                name = "PlaylistManager Back Icon",
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp
+            };
+            texture.SetPixels32(pixels);
+            texture.Apply(false, true);
 
-    public enum FolderMode
-    {
-        None,
-        AllPacks,
-        CustomPacks,
-        Playlists,
-        Folders
+            var sprite = Sprite.Create(texture, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
+            sprite.name = "PlaylistManager Back Icon";
+            return sprite;
+        }
+
+        private bool IsCustomSongsViewActive()
+            => !disposed
+                && annotatedBeatmapLevelCollectionsViewController.isActiveAndEnabled
+                && selectLevelCategoryViewController.selectedLevelCategory == SelectLevelCategoryViewController.LevelCategory.CustomSongs;
+
+        private string GetSelectedPackId()
+        {
+            var selectedPack = annotatedBeatmapLevelCollectionsViewController.selectedAnnotatedBeatmapLevelPack;
+            return selectedPack is FolderLevelPack ? null : selectedPack?.packID;
+        }
+
+        private bool IsCurrentDirectoryDisplayed()
+        {
+            var displayedPacks = annotatedBeatmapLevelCollectionsViewController._annotatedBeatmapLevelCollections;
+            if (ReferenceEquals(displayedPacks, currentPacks))
+            {
+                return true;
+            }
+
+            if (displayedPacks == null || displayedPacks.Count != currentPacks.Count)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < displayedPacks.Count; i++)
+            {
+                if (displayedPacks[i]?.packID != currentPacks[i]?.packID)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static int FindSelectableIndex(IReadOnlyList<BeatmapLevelPack> packs, string preferredPackId)
+        {
+            if (!string.IsNullOrEmpty(preferredPackId))
+            {
+                for (var i = 0; i < packs.Count; i++)
+                {
+                    if (packs[i] is not FolderLevelPack && packs[i].packID == preferredPackId)
+                    {
+                        return i;
+                    }
+                }
+            }
+
+            for (var i = 0; i < packs.Count; i++)
+            {
+                if (packs[i] is not FolderLevelPack)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private sealed class FolderCover
+        {
+            internal FolderCover(Sprite sprite, DateTime lastWriteTimeUtc, long length)
+            {
+                Sprite = sprite;
+                LastWriteTimeUtc = lastWriteTimeUtc;
+                Length = length;
+            }
+
+            internal Sprite Sprite { get; }
+            internal DateTime LastWriteTimeUtc { get; }
+            internal long Length { get; }
+        }
     }
 }

@@ -105,6 +105,157 @@ namespace PlaylistManager.Utilities
             return playlists;
         }
 
+        /// <summary>
+        /// Loads only playlist files physically present in <paramref name="manager"/>'s
+        /// directory. BeatSaberPlaylistsLib's GetAllPlaylists(false) still searches child
+        /// manager caches, which can make a playlist from a sub-folder appear here when an
+        /// unrelated file has the same name.
+        /// </summary>
+        public static IPlaylist[] TryGetDirectPlaylists(BeatSaberPlaylistsLib.PlaylistManager manager)
+        {
+            if (manager == null || string.IsNullOrEmpty(manager.PlaylistPath))
+            {
+                return Array.Empty<IPlaylist>();
+            }
+
+            var candidates = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var exceptions = new List<Exception>();
+
+            try
+            {
+                foreach (var path in Directory.EnumerateFiles(manager.PlaylistPath, "*", SearchOption.TopDirectoryOnly))
+                {
+                    try
+                    {
+                        var extension = Path.GetExtension(path);
+                        var fileName = Path.GetFileNameWithoutExtension(path);
+                        if (string.IsNullOrEmpty(fileName) || manager.GetHandlerForExtension(extension) == null)
+                        {
+                            continue;
+                        }
+
+                        if (!candidates.TryGetValue(fileName, out var matchingFiles))
+                        {
+                            matchingFiles = new List<string>();
+                            candidates[fileName] = matchingFiles;
+                        }
+
+                        matchingFiles.Add(path);
+                    }
+                    catch (Exception exception)
+                    {
+                        exceptions.Add(exception);
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                exceptions.Add(exception);
+            }
+
+            var directPlaylists = new List<IPlaylist>(candidates.Count);
+            foreach (var candidate in candidates)
+            {
+                if (candidate.Value.Count > 1)
+                {
+                    Plugin.Log.Warn($"Multiple playlist files named '{candidate.Key}' exist in '{manager.PlaylistPath}'. Only one can be displayed by BeatSaberPlaylistsLib.");
+                }
+
+                try
+                {
+                    // A manager's cache is local, and searchChildren:false is essential here.
+                    var playlist = manager.GetPlaylist(candidate.Key, false);
+                    if (playlist != null)
+                    {
+                        directPlaylists.Add(playlist);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    exceptions.Add(exception);
+                }
+            }
+
+            if (exceptions.Count > 0)
+            {
+                var aggregateException = new AggregateException(exceptions);
+                Plugin.Log.Error($"Some playlists in '{manager.PlaylistPath}' could not be loaded: {aggregateException.Message}");
+                foreach (var exception in aggregateException.InnerExceptions)
+                {
+                    Plugin.Log.Error(exception.ToString());
+                }
+            }
+
+            return directPlaylists.ToArray();
+        }
+
+        /// <summary>
+        /// Reloads only the playlist objects represented by direct files in this manager.
+        /// This deliberately avoids PlaylistManager.RefreshPlaylists(false), whose internal
+        /// GetAllPlaylists call can still resolve same-named playlists from child caches.
+        /// </summary>
+        public static IPlaylist[] RefreshDirectPlaylists(BeatSaberPlaylistsLib.PlaylistManager manager)
+        {
+            var directPlaylists = TryGetDirectPlaylists(manager);
+            string[] directFiles;
+            try
+            {
+                directFiles = Directory.GetFiles(manager.PlaylistPath, "*", SearchOption.TopDirectoryOnly);
+            }
+            catch (Exception exception)
+            {
+                Plugin.Log.Error($"Could not enumerate playlists in '{manager.PlaylistPath}': {exception}");
+                return directPlaylists;
+            }
+
+            foreach (var playlist in directPlaylists)
+            {
+                try
+                {
+                    var matchingFiles = directFiles
+                        .Where(path => string.Equals(
+                            Path.GetFileNameWithoutExtension(path),
+                            playlist.Filename,
+                            StringComparison.OrdinalIgnoreCase))
+                        .Where(path => manager.GetHandlerForExtension(Path.GetExtension(path)) != null)
+                        .ToArray();
+
+                    var suggestedExtension = playlist.SuggestedExtension?.TrimStart('.');
+                    var playlistPath = matchingFiles.FirstOrDefault(path => string.Equals(
+                            Path.GetExtension(path).TrimStart('.'),
+                            suggestedExtension,
+                            StringComparison.OrdinalIgnoreCase))
+                        ?? matchingFiles.FirstOrDefault();
+                    if (playlistPath == null)
+                    {
+                        continue;
+                    }
+
+                    var handler = manager.GetHandlerForExtension(Path.GetExtension(playlistPath));
+                    if (handler == null)
+                    {
+                        continue;
+                    }
+
+                    if (!handler.HandledType.IsInstanceOfType(playlist))
+                    {
+                        Plugin.Log.Warn($"Playlist '{playlist.Filename}' changed format on disk and will be reloaded after restarting the game.");
+                        continue;
+                    }
+
+                    using var playlistStream = BeatSaberPlaylistsLib.Utilities.OpenFileRead(playlistPath);
+                    playlist.Clear();
+                    handler.Populate(playlistStream, playlist);
+                }
+                catch (Exception exception)
+                {
+                    Plugin.Log.Error($"Could not refresh playlist '{playlist.Filename}' in '{manager.PlaylistPath}': {exception}");
+                }
+            }
+
+            return directPlaylists;
+        }
+
         public static BeatmapLevelPack[] TryGetAllPlaylistsAsLevelPacks()
         {
             IPlaylist[] playlists = TryGetAllPlaylists();

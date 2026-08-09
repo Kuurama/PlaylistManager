@@ -114,7 +114,7 @@ namespace PlaylistManager.UI
 
             this.parentManager = parentManager;
             childManagers = parentManager.GetChildManagers().ToList();
-            var childPlaylists = parentManager.GetAllPlaylists(false).Where(playlist => !playlist.ReadOnly);
+            var childPlaylists = PlaylistLibUtils.TryGetDirectPlaylists(parentManager).Where(playlist => !playlist.ReadOnly);
             this.childPlaylists = childPlaylists.ToList();
 
             foreach (var playlistManager in childManagers)
@@ -144,7 +144,7 @@ namespace PlaylistManager.UI
         {
             if (sender is IStagedSpriteLoad stagedSpriteLoadPlaylist)
             {
-                if (parentManager.GetAllPlaylists(false).Contains((IPlaylist)stagedSpriteLoadPlaylist))
+                if (PlaylistLibUtils.TryGetDirectPlaylists(parentManager).Contains((IPlaylist)stagedSpriteLoadPlaylist))
                 {
                     ShowPlaylist((IPlaylist)stagedSpriteLoadPlaylist);
                 }

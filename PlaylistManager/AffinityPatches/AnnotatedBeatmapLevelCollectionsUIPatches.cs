@@ -9,18 +9,16 @@ namespace PlaylistManager.AffinityPatches
     internal class AnnotatedBeatmapLevelCollectionsUIPatches : IAffinity
     {
         private readonly MainFlowCoordinator _mainFlowCoordinator;
-        private readonly AnnotatedBeatmapLevelCollectionsViewController _annotatedBeatmapLevelCollectionsViewController;
         private readonly SelectLevelCategoryViewController _selectLevelCategoryViewController;
 
         private int _originalColumnCount;
         private Vector2 _originalScreenSize;
-        private bool _isGridResized;
+        private bool _isCustomSongsGridActive;
         private bool _isScreenResized;
 
-        private AnnotatedBeatmapLevelCollectionsUIPatches(MainFlowCoordinator mainFlowCoordinator, AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController, SelectLevelCategoryViewController selectLevelCategoryViewController)
+        private AnnotatedBeatmapLevelCollectionsUIPatches(MainFlowCoordinator mainFlowCoordinator, SelectLevelCategoryViewController selectLevelCategoryViewController)
         {
             _mainFlowCoordinator = mainFlowCoordinator;
-            _annotatedBeatmapLevelCollectionsViewController = annotatedBeatmapLevelCollectionsViewController;
             _selectLevelCategoryViewController = selectLevelCategoryViewController;
         }
 
@@ -28,6 +26,21 @@ namespace PlaylistManager.AffinityPatches
         [AffinityPrefix]
         private void ResizeGrid(AnnotatedBeatmapLevelCollectionsGridView __instance, IReadOnlyList<BeatmapLevelPack> annotatedBeatmapLevelCollections)
         {
+            // SetData reinitializes the animator but does not cancel an open/close tween. Close
+            // the old layout first so an async cover refresh or folder navigation cannot leave
+            // the main screen enlarged or animate the replacement grid with stale dimensions.
+            if (_isScreenResized)
+            {
+                var selectedIndex = __instance._selectedCellIndex;
+                if (selectedIndex < 0)
+                {
+                    __instance._selectedCellIndex = 0;
+                }
+
+                __instance.CloseLevelCollection(false);
+                __instance._selectedCellIndex = selectedIndex;
+            }
+
             if (_originalColumnCount == default)
             {
                 _originalColumnCount = __instance._gridView._columnCount;
@@ -38,61 +51,13 @@ namespace PlaylistManager.AffinityPatches
             {
                 // Number of columns for max visible row count before it starts clipping with the ground.
                 __instance._gridView._columnCount = Math.Max(Mathf.CeilToInt((annotatedBeatmapLevelCollections?.Count ?? 0) / 5f), _originalColumnCount);
-
-                // Remove one column to make room for our buttons.
-                if (!_isGridResized)
-                {
-                    __instance._gridView._visibleColumnCount -= 1;
-
-                    var rectTransform = (RectTransform)__instance._gridView.transform;
-                    rectTransform.sizeDelta -= new Vector2(__instance._cellWidth, 0);
-                    rectTransform.anchoredPosition -= new Vector2(__instance._cellWidth / 2, 0);
-
-                    _isGridResized = true;
-                }
+                _isCustomSongsGridActive = true;
             }
             else if (selectedLevelCategory == SelectLevelCategoryViewController.LevelCategory.MusicPacks)
             {
                 __instance._gridView._columnCount = _originalColumnCount;
-
-                // Restore the removed column since we don't want to show an empty cell.
-                if (_isGridResized)
-                {
-                    __instance._gridView._visibleColumnCount += 1;
-
-                    var rectTransform = (RectTransform)__instance._gridView.transform;
-                    rectTransform.sizeDelta += new Vector2(__instance._cellWidth, 0);
-                    rectTransform.anchoredPosition += new Vector2(__instance._cellWidth / 2, 0);
-
-                    _isGridResized = false;
-                }
+                _isCustomSongsGridActive = false;
             }
-        }
-
-        [AffinityPatch(typeof(AnnotatedBeatmapLevelCollectionsGridViewAnimator), nameof(AnnotatedBeatmapLevelCollectionsGridViewAnimator.GetContentXOffset))]
-        private void RecalculateContentXOffsetBasedOnColumnCount(AnnotatedBeatmapLevelCollectionsGridViewAnimator __instance, ref float __result)
-        {
-            if (_annotatedBeatmapLevelCollectionsViewController._annotatedBeatmapLevelCollectionsGridView._annotatedBeatmapLevelCollections == null)
-            {
-                return;
-            }
-
-            if (_annotatedBeatmapLevelCollectionsViewController._annotatedBeatmapLevelCollectionsGridView._annotatedBeatmapLevelCollections.Count <= __instance._visibleColumnCount)
-            {
-                __result = __instance._columnWidth;
-
-                return;
-            }
-
-            var zeroOffset = (__instance._columnCount - 1) / 2f;
-            var maxMove = (__instance._columnCount - __instance._visibleColumnCount) / 2f;
-            var toMove = zeroOffset - __instance._selectedColumn;
-            if (__instance._visibleColumnCount % 2 == 0)
-            {
-                toMove -= 0.5f;
-            }
-
-            __result = Math.Clamp(toMove, -maxMove, maxMove) * __instance._columnWidth;
         }
 
         [AffinityPatch(typeof(AnnotatedBeatmapLevelCollectionsGridViewAnimator), nameof(AnnotatedBeatmapLevelCollectionsGridViewAnimator.AnimateOpen))]
@@ -108,7 +73,7 @@ namespace PlaylistManager.AffinityPatches
                 __instance._viewportTransform.sizeDelta = new Vector2(x, __instance._viewportTransform.sizeDelta.y);
             }
 
-            if (_isGridResized)
+            if (_isCustomSongsGridActive)
             {
                 // It would otherwise fly away when setting the Screen size.
                 var rectTransform = (RectTransform)_selectLevelCategoryViewController.transform;
@@ -129,7 +94,8 @@ namespace PlaylistManager.AffinityPatches
                 }
 
                 // Resizing Screen is needed to allow the hover hint to be shown when the GridView is larger.
-                rectTransform.sizeDelta = new Vector2(_originalScreenSize.x + (__instance._columnCount - __instance._visibleColumnCount - 1) * __instance._columnWidth * 2, _originalScreenSize.y);
+                var additionalColumns = Math.Max(0, __instance._columnCount - __instance._visibleColumnCount);
+                rectTransform.sizeDelta = new Vector2(_originalScreenSize.x + additionalColumns * __instance._columnWidth * 2, _originalScreenSize.y);
 
                 _isScreenResized = true;
             }

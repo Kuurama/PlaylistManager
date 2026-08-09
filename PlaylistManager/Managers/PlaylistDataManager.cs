@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using BeatSaberPlaylistsLib.Types;
 using PlaylistManager.HarmonyPatches;
 using PlaylistManager.Interfaces;
+using PlaylistManager.Types;
 using PlaylistManager.UI;
 using PlaylistManager.Utilities;
 using UnityEngine;
@@ -98,14 +99,16 @@ namespace PlaylistManager
         {
             if (beatmapLevelPack is PlaylistLevelPack playlistLevelPack)
             {
-                Events.RaisePlaylistSelected(playlistLevelPack.playlist, parentManager);
                 selectedPlaylist = playlistLevelPack.playlist;
-                parentManager = PlaylistLibUtils.playlistManager.GetManagerForPlaylist(playlistLevelPack.playlist);
+                parentManager = GetParentManagerForVisiblePlaylist(playlistLevelPack.playlist);
+                Events.RaisePlaylistSelected(playlistLevelPack.playlist, parentManager);
             }
             else
             {
                 selectedPlaylist = null;
-                parentManager = null;
+                parentManager = ReferenceEquals(beatmapLevelPack, emptyBeatmapLevelPack)
+                    ? foldersViewController?.CurrentParentManager
+                    : null;
             }
             foreach (var levelCollectionUpdater in levelCollectionUpdaters)
             {
@@ -142,8 +145,22 @@ namespace PlaylistManager
         {
             if (annotatedBeatmapLevelCollections.Count != 0)
             {
-                annotatedBeatmapLevelCollectionsViewController.SetData(annotatedBeatmapLevelCollections, indexToSelect, false);
-                levelFilteringNavigationController.HandleAnnotatedBeatmapLevelCollectionsViewControllerDidSelectAnnotatedBeatmapLevelCollection(annotatedBeatmapLevelCollections[indexToSelect]);
+                indexToSelect = FindSelectableIndex(annotatedBeatmapLevelCollections, indexToSelect);
+                if (indexToSelect >= 0)
+                {
+                    annotatedBeatmapLevelCollectionsViewController.SetData(annotatedBeatmapLevelCollections, indexToSelect, false);
+                    levelFilteringNavigationController.HandleAnnotatedBeatmapLevelCollectionsViewControllerDidSelectAnnotatedBeatmapLevelCollection(annotatedBeatmapLevelCollections[indexToSelect]);
+                }
+                else
+                {
+                    // SetData requires an index even when a directory contains only folders.
+                    // Clear the programmatic selection immediately so the sole Back tile remains clickable.
+                    annotatedBeatmapLevelCollectionsViewController.SetData(annotatedBeatmapLevelCollections, 0, false);
+                    ClearSyntheticSelection();
+
+                    selectedPlaylist = null;
+                    levelFilteringNavigationController.HandleAnnotatedBeatmapLevelCollectionsViewControllerDidSelectAnnotatedBeatmapLevelCollection(emptyBeatmapLevelPack);
+                }
             }
             else
             {
@@ -151,6 +168,61 @@ namespace PlaylistManager
                 annotatedBeatmapLevelCollectionsViewController.SetData(annotatedBeatmapLevelCollections, 0, true);
                 levelFilteringNavigationController.HandleAnnotatedBeatmapLevelCollectionsViewControllerDidSelectAnnotatedBeatmapLevelCollection(annotatedBeatmapLevelCollections[0]);
             }
+        }
+
+        private BeatSaberPlaylistsLib.PlaylistManager GetParentManagerForVisiblePlaylist(IPlaylist playlist)
+        {
+            var currentManager = foldersViewController?.CurrentParentManager;
+            if (currentManager != null)
+            {
+                return foldersViewController.TryGetVisibleParent(playlist, out var visibleParentManager)
+                    ? visibleParentManager
+                    : currentManager;
+            }
+
+            return PlaylistLibUtils.playlistManager.GetManagerForPlaylist(playlist);
+        }
+
+        private static int FindSelectableIndex(IReadOnlyList<BeatmapLevelPack> collections, int requestedIndex)
+        {
+            if (requestedIndex >= 0 && requestedIndex < collections.Count && collections[requestedIndex] is not FolderLevelPack)
+            {
+                return requestedIndex;
+            }
+
+            var startIndex = Math.Min(Math.Max(requestedIndex, 0), collections.Count - 1);
+            for (var i = startIndex; i >= 0; i--)
+            {
+                if (collections[i] is not FolderLevelPack)
+                {
+                    return i;
+                }
+            }
+
+            for (var i = startIndex + 1; i < collections.Count; i++)
+            {
+                if (collections[i] is not FolderLevelPack)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private void ClearSyntheticSelection()
+        {
+            var gridViewController = annotatedBeatmapLevelCollectionsViewController._annotatedBeatmapLevelCollectionsGridView;
+            foreach (var component in gridViewController._gridView.cellsEnumerator)
+            {
+                if (component is HMUI.SelectableCell selectableCell)
+                {
+                    selectableCell.SetSelected(false, HMUI.SelectableCell.TransitionType.Instant, gridViewController, false);
+                }
+            }
+
+            gridViewController._selectedCellIndex = -1;
+            annotatedBeatmapLevelCollectionsViewController._selectedItemIndex = -1;
         }
     }
 }
