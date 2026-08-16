@@ -128,7 +128,7 @@ namespace PlaylistManager.AffinityPatches
             text.color = Color.white;
             text.fontStyle = FontStyles.Bold;
             text.alignment = TextAlignmentOptions.Center;
-            text.textWrappingMode = TextWrappingModes.NoWrap;
+            text.enableWordWrapping = false;
             text.overflowMode = TextOverflowModes.Ellipsis;
             text.enableAutoSizing = true;
             text.fontSizeMin = 1.6f;

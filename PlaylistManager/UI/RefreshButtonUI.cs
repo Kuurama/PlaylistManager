@@ -37,7 +37,7 @@ namespace PlaylistManager.UI
             if (!PluginConfig.Instance.FoldersDisabled && _foldersViewController != null)
             {
                 var playlistCount = _foldersViewController.RefreshCurrentDirectoryFromDisk();
-                _progressBar.AppendText($"\n{playlistCount} playlists loaded from the current folder");
+                _progressBar.AppendText($"\n{playlistCount} playlists loaded here");
             }
             else
             {
