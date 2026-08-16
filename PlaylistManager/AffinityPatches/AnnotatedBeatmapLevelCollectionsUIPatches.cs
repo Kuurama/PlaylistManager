@@ -9,6 +9,7 @@ namespace PlaylistManager.AffinityPatches
     internal class AnnotatedBeatmapLevelCollectionsUIPatches : IAffinity
     {
         private readonly MainFlowCoordinator _mainFlowCoordinator;
+        private readonly AnnotatedBeatmapLevelCollectionsViewController _annotatedBeatmapLevelCollectionsViewController;
         private readonly SelectLevelCategoryViewController _selectLevelCategoryViewController;
 
         private int _originalColumnCount;
@@ -16,9 +17,10 @@ namespace PlaylistManager.AffinityPatches
         private bool _isGridResized;
         private bool _isScreenResized;
 
-        private AnnotatedBeatmapLevelCollectionsUIPatches(MainFlowCoordinator mainFlowCoordinator, SelectLevelCategoryViewController selectLevelCategoryViewController)
+        private AnnotatedBeatmapLevelCollectionsUIPatches(MainFlowCoordinator mainFlowCoordinator, AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController, SelectLevelCategoryViewController selectLevelCategoryViewController)
         {
             _mainFlowCoordinator = mainFlowCoordinator;
+            _annotatedBeatmapLevelCollectionsViewController = annotatedBeatmapLevelCollectionsViewController;
             _selectLevelCategoryViewController = selectLevelCategoryViewController;
         }
 
@@ -65,6 +67,37 @@ namespace PlaylistManager.AffinityPatches
                     _isGridResized = false;
                 }
             }
+        }
+
+        [AffinityPatch(typeof(AnnotatedBeatmapLevelCollectionsGridViewAnimator), nameof(AnnotatedBeatmapLevelCollectionsGridViewAnimator.GetContentXOffset))]
+        private void RecalculateContentXOffsetBasedOnColumnCount(AnnotatedBeatmapLevelCollectionsGridViewAnimator __instance, ref float __result)
+        {
+            var collections = _annotatedBeatmapLevelCollectionsViewController
+                ._annotatedBeatmapLevelCollectionsGridView
+                ._annotatedBeatmapLevelCollections;
+            if (collections == null)
+            {
+                return;
+            }
+
+            // Beat Saber 1.40.8 needs the original PlaylistManager left margin after
+            // reducing the visible grid by one column. Newer game versions align the
+            // content themselves, which is why this patch is absent from master.
+            if (collections.Count <= __instance._visibleColumnCount)
+            {
+                __result = __instance._columnWidth;
+                return;
+            }
+
+            var zeroOffset = (__instance._columnCount - 1) / 2f;
+            var maxMove = (__instance._columnCount - __instance._visibleColumnCount) / 2f;
+            var toMove = zeroOffset - __instance._selectedColumn;
+            if (__instance._visibleColumnCount % 2 == 0)
+            {
+                toMove -= 0.5f;
+            }
+
+            __result = Math.Clamp(toMove, -maxMove, maxMove) * __instance._columnWidth;
         }
 
         [AffinityPatch(typeof(AnnotatedBeatmapLevelCollectionsGridViewAnimator), nameof(AnnotatedBeatmapLevelCollectionsGridViewAnimator.AnimateOpen))]
