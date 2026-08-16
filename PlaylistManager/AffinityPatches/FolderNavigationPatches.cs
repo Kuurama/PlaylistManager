@@ -62,9 +62,17 @@ namespace PlaylistManager.AffinityPatches
             // InternalToggle uses the cell itself as changeOwner for an actual click/submit.
             // SetData uses null while selecting its initial index; consume that synthetic
             // selection without navigating automatically.
-            return !object.ReferenceEquals(changeOwner, selectableCell)
-                ? false
-                : !foldersViewController.TryOpenFolder(folderLevelPack);
+            if (!object.ReferenceEquals(changeOwner, selectableCell))
+            {
+                return false;
+            }
+
+            // Consuming the folder click also skips the game's normal selection handler,
+            // which is responsible for closing the expanded grid. Reset the old animator
+            // before SetData publishes the target directory or the replacement cells can
+            // inherit its expanded content offset.
+            __instance.CloseLevelCollection(false);
+            return !foldersViewController.TryOpenFolder(folderLevelPack);
         }
 
         [AffinityPatch(typeof(AnnotatedBeatmapLevelCollectionsViewController), "get_selectedAnnotatedBeatmapLevelPack")]
