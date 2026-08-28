@@ -1,5 +1,7 @@
 ﻿using BeatSaberMarkupLanguage.Attributes;
+using BeatSaberMarkupLanguage.Components.Settings;
 using BeatSaberMarkupLanguage.ViewControllers;
+using PlaylistManager.AffinityPatches;
 using PlaylistManager.Configuration;
 using System;
 using Zenject;
@@ -11,6 +13,10 @@ namespace PlaylistManager.UI
     internal class SettingsViewController : BSMLAutomaticViewController
     {
         private MenuTransitionsHelper menuTransitionsHelper;
+        private AnnotatedBeatmapLevelCollectionsUIPatches _annotatedBeatmapLevelCollectionsUIPatches;
+
+        [UIComponent("base-column-count-setting")]
+        private IncrementSetting _baseColumnCountSetting;
 
         private bool _defaultImageDisabled;
         private bool _defaultAllowDuplicates;
@@ -24,14 +30,16 @@ namespace PlaylistManager.UI
         private bool _downloadDuringGameplay;
         private bool _driveFullProtection;
         private bool _easterEggs;
+        private int _baseColumnCount;
 
         public event Action DismissFlowEvent;
         public event Action NameFetchRequestedEvent;
 
         [Inject]
-        public void Construct(MenuTransitionsHelper menuTransitionsHelper)
+        public void Construct(MenuTransitionsHelper menuTransitionsHelper, AnnotatedBeatmapLevelCollectionsUIPatches annotatedBeatmapLevelCollectionsUIPatches)
         {
             this.menuTransitionsHelper = menuTransitionsHelper;
+            _annotatedBeatmapLevelCollectionsUIPatches = annotatedBeatmapLevelCollectionsUIPatches;
         }
 
         protected override void DidActivate(bool firstActivation, bool addedToHierarchy, bool screenSystemEnabling)
@@ -51,6 +59,12 @@ namespace PlaylistManager.UI
             DownloadDuringGameplay = PluginConfig.Instance.DownloadDuringGameplay;
             DriveFullProtection = PluginConfig.Instance.DriveFullProtection;
             EasterEggs = PluginConfig.Instance.EasterEggs;
+
+            var defaultBaseColumnCount = _annotatedBeatmapLevelCollectionsUIPatches.DefaultBaseColumnCount;
+            var selectedBaseColumnCount = _annotatedBeatmapLevelCollectionsUIPatches.ResolveBaseColumnCount(PluginConfig.Instance.BaseColumnCount);
+
+            _baseColumnCountSetting.MaxValue = Math.Max(defaultBaseColumnCount, selectedBaseColumnCount);
+            BaseColumnCount = selectedBaseColumnCount;
         }
 
         [UIAction("cancel-click")]
@@ -75,6 +89,9 @@ namespace PlaylistManager.UI
             PluginConfig.Instance.DownloadDuringGameplay = DownloadDuringGameplay;
             PluginConfig.Instance.DriveFullProtection = DriveFullProtection;
             PluginConfig.Instance.EasterEggs = EasterEggs;
+            PluginConfig.Instance.BaseColumnCount = BaseColumnCount == _annotatedBeatmapLevelCollectionsUIPatches.DefaultBaseColumnCount
+                ? 0
+                : BaseColumnCount;
 
             if (softRestart)
             {
@@ -196,6 +213,18 @@ namespace PlaylistManager.UI
             }
         }
 
+        [UIValue("base-column-count")]
+        private int BaseColumnCount
+        {
+            get => _baseColumnCount;
+            set
+            {
+                _baseColumnCount = value;
+                NotifyPropertyChanged(nameof(BaseColumnCount));
+                NotifyPropertyChanged(nameof(SoftRestart));
+            }
+        }
+
         #endregion
 
         #region Other Settings
@@ -248,6 +277,9 @@ namespace PlaylistManager.UI
 
         [UIValue("soft-restart")]
         private bool SoftRestart => PlaylistHoverHints != PluginConfig.Instance.PlaylistHoverHints ||
-            FoldersDisabled != PluginConfig.Instance.FoldersDisabled;
+            FoldersDisabled != PluginConfig.Instance.FoldersDisabled ||
+            BaseColumnCount != SavedBaseColumnCount;
+
+        private int SavedBaseColumnCount => _annotatedBeatmapLevelCollectionsUIPatches.ResolveBaseColumnCount(PluginConfig.Instance.BaseColumnCount);
     }
 }

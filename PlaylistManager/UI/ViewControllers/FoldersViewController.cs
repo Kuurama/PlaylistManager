@@ -527,24 +527,8 @@ namespace PlaylistManager.UI
                 return;
             }
 
-            PruneFolderCoverCacheToVisibleFolders();
             var generation = ++navigationGeneration;
             _ = LoadVisibleFolderCoversAsync(manager, generation);
-        }
-
-        private void PruneFolderCoverCacheToVisibleFolders()
-        {
-            var visibleCoverPaths = new HashSet<string>(
-                currentPacks
-                    .OfType<FolderLevelPack>()
-                    .Where(folder => !folder.IsBack)
-                    .Select(folder => Path.Combine(folder.TargetManager.PlaylistPath, FolderCoverFileName)),
-                StringComparer.OrdinalIgnoreCase);
-
-            foreach (var coverPath in folderCovers.Keys.Where(path => !visibleCoverPaths.Contains(path)).ToArray())
-            {
-                RemoveCachedCover(coverPath);
-            }
         }
 
         private async Task LoadVisibleFolderCoversAsync(BeatSaberPlaylistsLib.PlaylistManager manager, int generation)

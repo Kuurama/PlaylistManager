@@ -72,7 +72,17 @@ namespace PlaylistManager.AffinityPatches
             // before SetData publishes the target directory or the replacement cells can
             // inherit its expanded content offset.
             __instance.CloseLevelCollection(false);
-            return !foldersViewController.TryOpenFolder(folderLevelPack);
+
+            var folderOpened = foldersViewController.TryOpenFolder(folderLevelPack);
+            if (folderOpened)
+            {
+                // The grid is rebuilt beneath a pointer that has not moved, so Unity
+                // does not emit another pointer-enter event for the replacement cells.
+                // Replay the native path to keep the new folder hovered automatically.
+                __instance.OnPointerEnter(null);
+            }
+
+            return !folderOpened;
         }
 
         [AffinityPatch(typeof(AnnotatedBeatmapLevelCollectionsViewController), "get_selectedAnnotatedBeatmapLevelPack")]
