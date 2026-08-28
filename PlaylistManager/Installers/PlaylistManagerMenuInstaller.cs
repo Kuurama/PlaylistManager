@@ -31,7 +31,8 @@ namespace PlaylistManager.Installers
             Container.BindInterfacesTo<RefreshButtonUI>().AsSingle();
 
             Container.BindInterfacesTo<LevelCollectionCellSetDataPatch>().AsSingle();
-            Container.BindInterfacesTo<AnnotatedBeatmapLevelCollectionsUIPatches>().AsSingle();
+            Container.BindInterfacesAndSelfTo<AnnotatedBeatmapLevelCollectionsUIPatches>().AsSingle();
+            Container.BindInterfacesTo<PlaylistGridScrollController>().AsSingle();
 
             Container.BindInterfacesTo<PlaylistUIManager>().AsSingle();
             Container.BindInterfacesAndSelfTo<PlaylistDataManager>().AsSingle();

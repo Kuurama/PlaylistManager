@@ -15,6 +15,7 @@
 			<checkbox value='hover-hint' text='Playlist Name on Hover' hover-hint='Show playlist name when hovering over one in the table.' apply-on-change='true' bind-value='true' />
 			<checkbox value='download-icon' text='Show Download Icon' hover-hint='Show download icon for playlists if songs are missing.' apply-on-change='true' bind-value='true' />
 			<checkbox value='blurred-art' text='Blurred Artwork' hover-hint='Use blurred artwork for playlist cover in preview.' apply-on-change='true' bind-value='true' />
+			<increment-setting id='base-column-count-setting' value='base-column-count' text='Playlist Columns' hover-hint='When set below the maximum, large playlist collections scroll vertically instead of wrapping around you.' min='5' max='8' increment='1' integer-only='true' apply-on-change='true' bind-value='true' />
 			<checkbox value='no-folders' text='Disable Folder Navigation' hover-hint='Show playlists from every subfolder together in one flat list. Requires a restart.' apply-on-change='true' bind-value='true' />
 		</vertical>
 		<text text='Other Settings' align='Left' italics='true' font-size='5' />
