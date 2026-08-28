@@ -22,6 +22,9 @@ namespace PlaylistManager.Configuration
         public virtual bool DriveFullProtection { get; set; } = true;
         public virtual bool ShowDownloadIcon { get; set; } = true;
 
+        // Zero keeps the game's adaptive grid width; a positive value is a fixed accessibility override.
+        public virtual int BaseColumnCount { get; set; }
+
         [UseConverter(typeof(EnumConverter<SyncOptions>))]
         [NonNullable]
         public virtual SyncOptions SyncOption { get; set; } = SyncOptions.On;
