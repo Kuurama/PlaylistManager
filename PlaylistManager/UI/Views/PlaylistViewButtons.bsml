@@ -1,8 +1,13 @@
 ﻿<bg id='root' active='false' anchor-pos-x='38' xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance' xsi:schemaLocation='https://monkeymanboy.github.io/BSML-Docs/ https://raw.githubusercontent.com/monkeymanboy/BSML-Docs/gh-pages/BSMLSchema.xsd'>
-	<icon-button id='create-button' hover-hint='Create a new playlist!' on-click='create-click' pref-width='18' pref-height='18' />
+	<icon-button id='create-button' hover-hint='Create a playlist or folder' on-click='create-click' pref-width='18' pref-height='18' />
 	<icon-button id='download-button' hover-hint='Playlist Download Queue' on-click='queue-click' interactable='~queue-interactable' pref-width='18' pref-height='18' />
 	<icon-button id='delete-folder-button' hover-hint='Delete the current folder' on-click='delete-folder-click' interactable='~delete-folder-interactable' pref-width='18' pref-height='18' />
 	<icon-button id='flow-button' icon='PlaylistManager.Icons.ButtonIcon.png' hover-hint='PlaylistManager Menu' on-click='flow-click' anchor-pos-x='53' anchor-pos-y='-10' pref-width='18' pref-height='18' />
+	<modal id='create-menu' show-event='open-create-menu' hide-event='close-create-menu' clickerino-offerino-closerino='true' size-delta-x='15' size-delta-y='18' move-to-center='false'>
+		<horizontal horizontal-fit='PreferredSize' vertical-fit='PreferredSize' anchor-pos-y='-1'>
+			<list id='create-options' pref-width='15' pref-height='18' select-cell='select-create-option' list-style='Simple' />
+		</horizontal>
+	</modal>
 	<modal id='queue-modal' hide-event='close-queue' clickerino-offerino-closerino='true' size-delta-x='75' size-delta-y='56.25' move-to-center='false' anchor-pos-x='-30' anchor-pos-y='-35'>
 		<button text='x' anchor-pos-x='69.5' anchor-pos-y='-4.13' click-event='close-queue' />
 	</modal>

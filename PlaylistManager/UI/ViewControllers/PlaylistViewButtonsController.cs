@@ -1,11 +1,14 @@
 ﻿using BeatSaberMarkupLanguage;
 using BeatSaberMarkupLanguage.Attributes;
 using BeatSaberMarkupLanguage.Components;
+using BeatSaberMarkupLanguage.Parser;
 using HMUI;
 using PlaylistManager.Interfaces;
 using PlaylistManager.Utilities;
 using System;
 using System.ComponentModel;
+using System.IO;
+using System.Linq;
 using IPA.Loader;
 using PlaylistManager.Downloaders;
 using SiraUtil.Zenject;
@@ -15,13 +18,15 @@ using Zenject;
 
 namespace PlaylistManager.UI
 {
-    internal class PlaylistViewButtonsController : IInitializable, IDisposable, INotifyPropertyChanged, ILevelCategoryUpdater, IParentManagerUpdater
+    internal class PlaylistViewButtonsController : IInitializable, ITickable, IDisposable, INotifyPropertyChanged, ILevelCategoryUpdater, IParentManagerUpdater
     {
         private readonly PopupModalsController popupModalsController;
         private readonly TweeningManager uwuTweenyManager;
         private readonly PlaylistSequentialDownloader playlistDownloader;
         private readonly PlaylistDownloaderViewController playlistDownloaderViewController;
         private readonly PlaylistManagerFlowCoordinator playlistManagerFlowCoordinator;
+        private readonly IVRInputModule vrInputModule;
+        private readonly VRUIControls.VRPointer vrPointer;
 
         private readonly MainFlowCoordinator mainFlowCoordinator;
         private readonly AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController;
@@ -50,6 +55,15 @@ namespace PlaylistManager.UI
         [UIComponent("flow-button")]
         private readonly ButtonIconImage flowButton;
 
+        [UIComponent("create-menu")]
+        private readonly ModalView createMenu;
+
+        [UIComponent("create-menu")]
+        private readonly RectTransform createMenuTransform;
+
+        [UIComponent("create-options")]
+        private readonly CustomListTableData createOptionsTableData;
+
         private UnityEngine.UI.Image downloadButtonImage;
         private Color downloadButtonImageColor;
         private Sprite createButtonSprite;
@@ -63,11 +77,15 @@ namespace PlaylistManager.UI
         private readonly RectTransform queueModalTransform;
 
         private Vector3 queueModalPosition;
+        private bool triggerWasDown;
+
+        [UIParams]
+        private readonly BSMLParserParams parserParams;
 
         public PlaylistViewButtonsController(PopupModalsController popupModalsController, TimeTweeningManager uwuTweenyManager, PlaylistSequentialDownloader playlistDownloader, PlaylistDownloaderViewController playlistDownloaderViewController,
             MainFlowCoordinator mainFlowCoordinator, PlaylistManagerFlowCoordinator playlistManagerFlowCoordinator, AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController,
             LevelFilteringNavigationController levelFilteringNavigationController, SelectLevelCategoryViewController selectLevelCategoryViewController, UBinder<Plugin, PluginMetadata> pluginMetadata, BSMLParser bsmlParser,
-            [InjectOptional] FoldersViewController foldersViewController)
+            IVRInputModule vrInputModule, [InjectOptional] FoldersViewController foldersViewController)
         {
             this.popupModalsController = popupModalsController;
             this.uwuTweenyManager = uwuTweenyManager;
@@ -76,6 +94,8 @@ namespace PlaylistManager.UI
 
             this.mainFlowCoordinator = mainFlowCoordinator;
             this.playlistManagerFlowCoordinator = playlistManagerFlowCoordinator;
+            this.vrInputModule = vrInputModule;
+            vrPointer = (vrInputModule as VRUIControls.VRInputModule)?.vrPointer;
             this.annotatedBeatmapLevelCollectionsViewController = annotatedBeatmapLevelCollectionsViewController;
             this.levelFilteringNavigationController = levelFilteringNavigationController;
             this.selectLevelCategoryViewController = selectLevelCategoryViewController;
@@ -90,15 +110,34 @@ namespace PlaylistManager.UI
             bsmlParser.Parse(BeatSaberMarkupLanguage.Utilities.GetResourceContent(pluginMetadata.Assembly, "PlaylistManager.UI.Views.PlaylistViewButtons.bsml"), annotatedBeatmapLevelCollectionsViewController.gameObject, this);
             playlistDownloader.QueueUpdatedEvent += DownloadQueueUpdated;
             playlistDownloader.PopupEvent += TweenButton;
+            vrInputModule.onProcessMousePressEvent += HandleGlobalPointerPress;
         }
 
         public void Dispose()
         {
             playlistDownloader.QueueUpdatedEvent -= DownloadQueueUpdated;
             playlistDownloader.PopupEvent -= TweenButton;
+            vrInputModule.onProcessMousePressEvent -= HandleGlobalPointerPress;
             DestroyRuntimeSprite(createButtonSprite);
             DestroyRuntimeSprite(downloadButtonSprite);
             DestroyRuntimeSprite(deleteFolderButtonSprite);
+        }
+
+        public void Tick()
+        {
+            if (vrPointer == null)
+            {
+                return;
+            }
+
+            var triggerIsDown = vrPointer.lastSelectedVrController?.triggerValue >= 0.9f;
+            var triggerWasPressed = triggerIsDown && !triggerWasDown;
+            triggerWasDown = triggerIsDown;
+
+            if (triggerWasPressed)
+            {
+                CloseCreateMenuUnlessPointerIsInside(vrPointer.pointingOver);
+            }
         }
 
         private void DownloadQueueUpdated()
@@ -155,6 +194,7 @@ namespace PlaylistManager.UI
                 }
                 else
                 {
+                    parserParams?.EmitEvent("close-create-menu");
                     rootTransform.gameObject.SetActive(false);
                 }
             }
@@ -184,6 +224,11 @@ namespace PlaylistManager.UI
             SetButtonIcon(downloadButton, downloadButtonSprite);
             SetButtonIcon(deleteFolderButton, deleteFolderButtonSprite);
 
+            createMenu._animateParentCanvas = false;
+            createOptionsTableData.Data.Add(new CustomListTableData.CustomCellInfo("Playlist"));
+            createOptionsTableData.Data.Add(new CustomListTableData.CustomCellInfo("Folder"));
+            createOptionsTableData.TableView.ReloadData();
+
             downloadButtonImage = downloadButton.Image;
             downloadButtonImageColor = downloadButtonImage.color;
             UpdateDownloadButtonAppearance();
@@ -193,12 +238,27 @@ namespace PlaylistManager.UI
             PositionButtons();
         }
 
-        #region Create Playlist
+        #region Create Playlist or Folder
 
         [UIAction("create-click")]
         private void CreateClicked()
         {
-            popupModalsController.ShowKeyboard(rootTransform, CreatePlaylist);
+            PositionCreateMenu();
+            parserParams.EmitEvent("close-create-menu");
+            parserParams.EmitEvent("open-create-menu");
+        }
+
+        [UIAction("select-create-option")]
+        private void SelectCreateOption(TableView tableView, int index)
+        {
+            if (index is < 0 or > 1)
+            {
+                return;
+            }
+
+            popupModalsController.ShowKeyboard(rootTransform, index == 0 ? CreatePlaylist : CreateFolder);
+            tableView.ClearSelection();
+            parserParams.EmitEvent("close-create-menu");
         }
 
         private void CreatePlaylist(string playlistName)
@@ -216,6 +276,77 @@ namespace PlaylistManager.UI
                 selectLevelCategoryViewController.LevelFilterCategoryIconSegmentedControlDidSelectCell(levelCategorySegmentedControl, 1);
                 levelFilteringNavigationController.SelectAnnotatedBeatmapLevelCollection(playlist.PlaylistLevelPack);
             }, "Go to playlist", "Dismiss");
+        }
+
+        private void CreateFolder(string folderName)
+        {
+            folderName = SanitizeFolderName(folderName);
+            if (string.IsNullOrWhiteSpace(folderName))
+            {
+                return;
+            }
+
+            var manager = foldersViewController?.CurrentParentManager
+                ?? parentManager
+                ?? BeatSaberPlaylistsLib.PlaylistManager.DefaultManager;
+            var existingChildren = manager.GetChildManagers().ToArray();
+
+            try
+            {
+                var childManager = manager.CreateChildManager(folderName);
+                var alreadyExisted = existingChildren.Any(existingChild =>
+                    ReferenceEquals(existingChild, childManager)
+                    || string.Equals(
+                        Path.GetFullPath(existingChild.PlaylistPath),
+                        Path.GetFullPath(childManager.PlaylistPath),
+                        StringComparison.OrdinalIgnoreCase));
+
+                if (alreadyExisted)
+                {
+                    popupModalsController.ShowOkModal(rootTransform, $"\"{folderName}\" already exists! Please use a different name.", null);
+                    return;
+                }
+
+                PlaylistLibUtils.playlistManager.RequestRefresh("PlaylistManager (plugin)");
+                if (ReferenceEquals(manager, foldersViewController?.CurrentParentManager))
+                {
+                    foldersViewController.Refresh();
+                }
+            }
+            catch (Exception exception)
+            {
+                Plugin.Log.Critical($"An exception was thrown while creating the playlist folder '{folderName}': {exception}");
+                popupModalsController.ShowOkModal(rootTransform, "Error: Folder cannot be created.", null);
+            }
+        }
+
+        private static string SanitizeFolderName(string folderName)
+            => folderName?.Trim().Replace("/", "").Replace("\\", "").Replace(".", "");
+
+        private void PositionCreateMenu()
+        {
+            Canvas.ForceUpdateCanvases();
+            var createButtonCenter = GetButtonVisualCenter(createButton.GetComponent<UnityEngine.UI.Button>());
+            var targetCenter = new Vector3(createButtonCenter.x - 12.5f, createButtonCenter.y - 3.425f, 0f);
+            createMenuTransform.position = rootTransform.TransformPoint(targetCenter);
+        }
+
+        private void HandleGlobalPointerPress(GameObject currentOverGo)
+            => CloseCreateMenuUnlessPointerIsInside(currentOverGo);
+
+        private void CloseCreateMenuUnlessPointerIsInside(GameObject currentOverGo)
+        {
+            if (createMenu == null || !createMenu.gameObject.activeInHierarchy)
+            {
+                return;
+            }
+
+            if (currentOverGo != null && currentOverGo.transform.IsChildOf(createMenuTransform))
+            {
+                return;
+            }
+
+            parserParams.EmitEvent("close-create-menu");
         }
 
         #endregion
