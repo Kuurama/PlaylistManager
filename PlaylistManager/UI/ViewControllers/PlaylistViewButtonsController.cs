@@ -30,6 +30,7 @@ namespace PlaylistManager.UI
         private readonly IconSegmentedControl levelCategorySegmentedControl;
         private readonly PluginMetadata pluginMetadata;
         private readonly BSMLParser bsmlParser;
+        private readonly FoldersViewController foldersViewController;
 
         private BeatSaberPlaylistsLib.PlaylistManager parentManager;
         public event PropertyChangedEventHandler PropertyChanged;
@@ -37,15 +38,23 @@ namespace PlaylistManager.UI
         [UIComponent("root")]
         private readonly RectTransform rootTransform;
 
+        [UIComponent("create-button")]
+        private readonly ButtonIconImage createButton;
+
         [UIComponent("download-button")]
-        private readonly RectTransform downloadButtonTransform;
+        private readonly ButtonIconImage downloadButton;
 
-        private CurvedTextMeshPro downloadButtonText;
-
-        private Color downloadButtonTextColor;
+        [UIComponent("delete-folder-button")]
+        private readonly ButtonIconImage deleteFolderButton;
 
         [UIComponent("flow-button")]
         private readonly ButtonIconImage flowButton;
+
+        private UnityEngine.UI.Image downloadButtonImage;
+        private Color downloadButtonImageColor;
+        private Sprite createButtonSprite;
+        private Sprite downloadButtonSprite;
+        private Sprite deleteFolderButtonSprite;
 
         [UIComponent("queue-modal")]
         private readonly ModalView queueModal;
@@ -57,7 +66,8 @@ namespace PlaylistManager.UI
 
         public PlaylistViewButtonsController(PopupModalsController popupModalsController, TimeTweeningManager uwuTweenyManager, PlaylistSequentialDownloader playlistDownloader, PlaylistDownloaderViewController playlistDownloaderViewController,
             MainFlowCoordinator mainFlowCoordinator, PlaylistManagerFlowCoordinator playlistManagerFlowCoordinator, AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController,
-            LevelFilteringNavigationController levelFilteringNavigationController, SelectLevelCategoryViewController selectLevelCategoryViewController, UBinder<Plugin, PluginMetadata> pluginMetadata, BSMLParser bsmlParser)
+            LevelFilteringNavigationController levelFilteringNavigationController, SelectLevelCategoryViewController selectLevelCategoryViewController, UBinder<Plugin, PluginMetadata> pluginMetadata, BSMLParser bsmlParser,
+            [InjectOptional] FoldersViewController foldersViewController)
         {
             this.popupModalsController = popupModalsController;
             this.uwuTweenyManager = uwuTweenyManager;
@@ -72,6 +82,7 @@ namespace PlaylistManager.UI
             levelCategorySegmentedControl = selectLevelCategoryViewController._levelFilterCategoryIconSegmentedControl;
             this.pluginMetadata = pluginMetadata.Value;
             this.bsmlParser = bsmlParser;
+            this.foldersViewController = foldersViewController;
         }
 
         public void Initialize()
@@ -85,29 +96,52 @@ namespace PlaylistManager.UI
         {
             playlistDownloader.QueueUpdatedEvent -= DownloadQueueUpdated;
             playlistDownloader.PopupEvent -= TweenButton;
+            DestroyRuntimeSprite(createButtonSprite);
+            DestroyRuntimeSprite(downloadButtonSprite);
+            DestroyRuntimeSprite(deleteFolderButtonSprite);
         }
 
         private void DownloadQueueUpdated()
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(QueueInteractable)));
+            UpdateDownloadButtonAppearance();
         }
 
         private void TweenButton()
         {
-            uwuTweenyManager.KillAllTweens(downloadButtonText);
+            if (downloadButtonImage == null)
+            {
+                return;
+            }
+
+            uwuTweenyManager.KillAllTweens(downloadButtonImage);
             if (playlistDownloader.PendingPopup != null)
             {
                 var tween = new FloatTween(0.35f, 0.6f, val =>
                 {
-                    downloadButtonText.color = new Color(val, val, val);
+                    downloadButtonImage.color = new Color(val, val, val);
                 }, 0.75f, EaseType.InOutBack);
-                uwuTweenyManager.AddTween(tween, downloadButtonText);
+                uwuTweenyManager.AddTween(tween, downloadButtonImage);
                 tween.onCompleted = delegate () { TweenButton(); };
             }
             else
             {
-                downloadButtonText.color = downloadButtonTextColor;
+                UpdateDownloadButtonAppearance();
             }
+        }
+
+        private void UpdateDownloadButtonAppearance()
+        {
+            if (downloadButtonImage == null)
+            {
+                return;
+            }
+
+            downloadButtonImage.color = new Color(
+                downloadButtonImageColor.r,
+                downloadButtonImageColor.g,
+                downloadButtonImageColor.b,
+                QueueInteractable ? 1f : 0.25f);
         }
 
         public void LevelCategoryUpdated(SelectLevelCategoryViewController.LevelCategory levelCategory, bool viewControllerActivated)
@@ -117,6 +151,7 @@ namespace PlaylistManager.UI
                 if (levelCategory == SelectLevelCategoryViewController.LevelCategory.CustomSongs)
                 {
                     rootTransform.gameObject.SetActive(true);
+                    PositionButtons();
                 }
                 else
                 {
@@ -125,19 +160,37 @@ namespace PlaylistManager.UI
             }
         }
 
-        public void ParentManagerUpdated(BeatSaberPlaylistsLib.PlaylistManager parentManager) => this.parentManager = parentManager;
+        public void ParentManagerUpdated(BeatSaberPlaylistsLib.PlaylistManager parentManager)
+        {
+            this.parentManager = parentManager;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DeleteFolderInteractable)));
+        }
 
         [UIAction("#post-parse")]
         private void PostParse()
         {
             queueModalPosition = queueModalTransform.localPosition;
 
-            downloadButtonText = downloadButtonTransform.GetComponentInChildren<CurvedTextMeshPro>();
-            downloadButtonTextColor = downloadButtonText.color;
+            var buttonScale = new Vector3(0.36f, 0.36f, 1f);
+            createButton.transform.localScale = buttonScale;
+            downloadButton.transform.localScale = buttonScale;
+            deleteFolderButton.transform.localScale = buttonScale;
+            flowButton.transform.localScale = buttonScale;
 
-            flowButton.transform.localScale = new Vector3(0.42f, 0.42f, 1f);
+            createButtonSprite = CreatePlusIcon();
+            downloadButtonSprite = CreateDownloadIcon();
+            deleteFolderButtonSprite = CreateTrashIcon();
+            SetButtonIcon(createButton, createButtonSprite);
+            SetButtonIcon(downloadButton, downloadButtonSprite);
+            SetButtonIcon(deleteFolderButton, deleteFolderButtonSprite);
+
+            downloadButtonImage = downloadButton.Image;
+            downloadButtonImageColor = downloadButtonImage.color;
+            UpdateDownloadButtonAppearance();
+
             var icon = flowButton.Image as ImageView;
             icon._skew = 0.18f;
+            PositionButtons();
         }
 
         #region Create Playlist
@@ -163,6 +216,191 @@ namespace PlaylistManager.UI
                 selectLevelCategoryViewController.LevelFilterCategoryIconSegmentedControlDidSelectCell(levelCategorySegmentedControl, 1);
                 levelFilteringNavigationController.SelectAnnotatedBeatmapLevelCollection(playlist.PlaylistLevelPack);
             }, "Go to playlist", "Dismiss");
+        }
+
+        #endregion
+
+        #region Delete Folder
+
+        [UIValue("delete-folder-interactable")]
+        private bool DeleteFolderInteractable => foldersViewController?.CanDeleteCurrentFolder == true;
+
+        [UIAction("delete-folder-click")]
+        private void DeleteFolderClicked()
+        {
+            var folderManager = foldersViewController?.CurrentParentManager;
+            if (folderManager?.Parent == null)
+            {
+                return;
+            }
+
+            var folderName = System.IO.Path.GetFileName(folderManager.PlaylistPath.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar));
+            popupModalsController.ShowYesNoModal(
+                rootTransform,
+                $"Delete the folder \"{folderName}\" and everything inside it?",
+                () => DeleteFolder(folderManager),
+                "Delete Folder",
+                "Cancel");
+        }
+
+        private void PositionButtons()
+        {
+            if (createButton == null || downloadButton == null || deleteFolderButton == null || flowButton == null)
+            {
+                return;
+            }
+
+            const float horizontalStep = 7.7f;
+            const float verticalStep = 6.85f;
+            Canvas.ForceUpdateCanvases();
+            var originalFlowButtonCenter = GetButtonVisualCenter(flowButton.GetComponent<UnityEngine.UI.Button>());
+
+            MoveButtonVisualCenter(deleteFolderButton.GetComponent<UnityEngine.UI.Button>(), originalFlowButtonCenter + new Vector2(-horizontalStep, 0f));
+            MoveButtonVisualCenter(downloadButton.GetComponent<UnityEngine.UI.Button>(), originalFlowButtonCenter + new Vector2(0f, verticalStep));
+            MoveButtonVisualCenter(createButton.GetComponent<UnityEngine.UI.Button>(), originalFlowButtonCenter + new Vector2(-horizontalStep, verticalStep));
+        }
+
+        private void MoveButtonVisualCenter(UnityEngine.UI.Button button, Vector2 targetCenter)
+        {
+            var currentCenter = GetButtonVisualCenter(button);
+            button.transform.localPosition += new Vector3(targetCenter.x - currentCenter.x, targetCenter.y - currentCenter.y, 0f);
+        }
+
+        private Vector2 GetButtonVisualCenter(UnityEngine.UI.Button button)
+        {
+            var background = button.transform.Find("BG") as RectTransform
+                ?? GetSpriteSwapBackground(button)
+                ?? button.targetGraphic?.rectTransform
+                ?? (RectTransform)button.transform;
+            var corners = new Vector3[4];
+            background.GetWorldCorners(corners);
+            var center = rootTransform.InverseTransformPoint((corners[0] + corners[2]) * 0.5f);
+            return new Vector2(center.x, center.y);
+        }
+
+        private static RectTransform GetSpriteSwapBackground(UnityEngine.UI.Button button)
+        {
+            var spriteSwap = button.GetComponent<ButtonSpriteSwap>();
+            if (spriteSwap?._images == null)
+            {
+                return null;
+            }
+
+            foreach (var image in spriteSwap._images)
+            {
+                if (image != null)
+                {
+                    return image.rectTransform;
+                }
+            }
+
+            return null;
+        }
+
+        private static void SetButtonIcon(ButtonIconImage button, Sprite sprite)
+        {
+            button.Image.sprite = sprite;
+            button.Image.preserveAspect = true;
+        }
+
+        private static Sprite CreatePlusIcon()
+        {
+            return CreateRuntimeIcon("PlaylistManagerPlusIcon", pixels =>
+            {
+                FillRect(pixels, 28, 12, 8, 40);
+                FillRect(pixels, 12, 28, 40, 8);
+            });
+        }
+
+        private static Sprite CreateDownloadIcon()
+        {
+            return CreateRuntimeIcon("PlaylistManagerDownloadIcon", pixels =>
+            {
+                FillRect(pixels, 28, 25, 8, 29);
+                for (var y = 0; y < 17; y++)
+                {
+                    var halfWidth = 4 + y / 2;
+                    FillRect(pixels, 32 - halfWidth, 13 + y, halfWidth * 2, 1);
+                }
+
+                FillRect(pixels, 12, 8, 40, 6);
+                FillRect(pixels, 12, 8, 6, 12);
+                FillRect(pixels, 46, 8, 6, 12);
+            });
+        }
+
+        private static Sprite CreateTrashIcon()
+        {
+            return CreateRuntimeIcon("PlaylistManagerTrashIcon", pixels =>
+            {
+                FillRect(pixels, 13, 47, 38, 6);
+                FillRect(pixels, 25, 54, 14, 5);
+                FillRect(pixels, 18, 15, 6, 31);
+                FillRect(pixels, 40, 15, 6, 31);
+                FillRect(pixels, 18, 10, 28, 6);
+                FillRect(pixels, 28, 20, 4, 20);
+                FillRect(pixels, 35, 20, 4, 20);
+            });
+        }
+
+        private static Sprite CreateRuntimeIcon(string name, Action<Color32[]> drawIcon)
+        {
+            const int iconSize = 64;
+            var pixels = new Color32[iconSize * iconSize];
+            drawIcon(pixels);
+
+            var texture = new Texture2D(iconSize, iconSize, TextureFormat.RGBA32, false)
+            {
+                name = name + "Texture",
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+                hideFlags = HideFlags.HideAndDontSave
+            };
+            texture.SetPixels32(pixels);
+            texture.Apply(false, true);
+
+            var sprite = Sprite.Create(texture, new Rect(0f, 0f, iconSize, iconSize), new Vector2(0.5f, 0.5f), iconSize / 10f);
+            sprite.name = name;
+            sprite.hideFlags = HideFlags.HideAndDontSave;
+            return sprite;
+        }
+
+        private static void FillRect(Color32[] pixels, int x, int y, int width, int height)
+        {
+            const int iconSize = 64;
+            var white = new Color32(255, 255, 255, 255);
+            for (var row = y; row < y + height; row++)
+            {
+                for (var column = x; column < x + width; column++)
+                {
+                    pixels[row * iconSize + column] = white;
+                }
+            }
+        }
+
+        private static void DestroyRuntimeSprite(Sprite sprite)
+        {
+            if (sprite == null)
+            {
+                return;
+            }
+
+            var texture = sprite.texture;
+            UnityEngine.Object.Destroy(sprite);
+            UnityEngine.Object.Destroy(texture);
+        }
+
+        private void DeleteFolder(BeatSaberPlaylistsLib.PlaylistManager folderManager)
+        {
+            try
+            {
+                foldersViewController.DeleteFolder(folderManager);
+            }
+            catch (Exception exception)
+            {
+                Plugin.Log.Critical($"An exception was thrown while deleting the playlist folder '{folderManager?.PlaylistPath}': {exception}");
+                popupModalsController.ShowOkModal(rootTransform, "Error: Folder cannot be deleted.", null);
+            }
         }
 
         #endregion

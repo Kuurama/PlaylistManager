@@ -31,6 +31,7 @@ namespace PlaylistManager.UI
         private readonly Dictionary<string, FolderCover> folderCovers = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<IPlaylist, BeatSaberPlaylistsLib.PlaylistManager> visiblePlaylistParents = new();
         private readonly Dictionary<string, DateTime> pendingDeletedPlaylistPaths = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, DateTime> pendingDeletedFolderPaths = new(StringComparer.OrdinalIgnoreCase);
 
         private IReadOnlyList<BeatmapLevelPack> rootPacks = Array.Empty<BeatmapLevelPack>();
         private IReadOnlyList<BeatmapLevelPack> currentPacks = Array.Empty<BeatmapLevelPack>();
@@ -57,6 +58,8 @@ namespace PlaylistManager.UI
                 ParentManagerUpdatedEvent?.Invoke(value);
             }
         }
+
+        internal bool CanDeleteCurrentFolder => !disposed && CurrentParentManager?.Parent != null;
 
         private FoldersViewController(
             AnnotatedBeatmapLevelCollectionsViewController annotatedBeatmapLevelCollectionsViewController,
@@ -116,6 +119,7 @@ namespace PlaylistManager.UI
 
             folderCovers.Clear();
             pendingDeletedPlaylistPaths.Clear();
+            pendingDeletedFolderPaths.Clear();
 
             if (folderIcon != null)
             {
@@ -212,6 +216,45 @@ namespace PlaylistManager.UI
             => visiblePlaylistParents.TryGetValue(playlist, out manager);
 
         /// <summary>
+        /// Recycles the selected subfolder, returns to its parent, and immediately removes
+        /// it from the visible grid while the playlist library finishes the recycle operation.
+        /// </summary>
+        internal bool DeleteFolder(BeatSaberPlaylistsLib.PlaylistManager folderManager)
+        {
+            if (disposed
+                || folderManager == null
+                || !ReferenceEquals(folderManager, CurrentParentManager)
+                || folderManager.Parent == null)
+            {
+                return false;
+            }
+
+            var parentManager = folderManager.Parent;
+            var folderPath = NormalizePath(folderManager.PlaylistPath);
+            pendingDeletedFolderPaths[folderPath] = DateTime.UtcNow;
+            navigationGeneration++;
+
+            try
+            {
+                parentManager.DeleteChildManager(folderManager, true);
+            }
+            catch
+            {
+                pendingDeletedFolderPaths.Remove(folderPath);
+                throw;
+            }
+
+            RemoveCachedFolderCovers(folderPath);
+            CurrentParentManager = parentManager;
+            if (IsCustomSongsViewActive())
+            {
+                PublishCurrentDirectory();
+            }
+
+            return true;
+        }
+
+        /// <summary>
         /// Removes a just-deleted playlist without immediately re-reading the file that the
         /// playlist library is still moving to the recycle bin on a worker thread.
         /// </summary>
@@ -268,8 +311,8 @@ namespace PlaylistManager.UI
         internal int RefreshCurrentDirectoryFromDisk()
         {
             var manager = EnsureExistingManager();
-            SynchronizeDirectChildManagers(manager);
             PruneCompletedPendingDeletions();
+            SynchronizeDirectChildManagers(manager);
             var directPlaylistCount = PlaylistLibUtils.RefreshDirectPlaylists(manager)
                 .Count(playlist => !IsPlaylistPendingDeletion(manager, playlist));
             if (IsCustomSongsViewActive())
@@ -306,8 +349,8 @@ namespace PlaylistManager.UI
         private IReadOnlyList<BeatmapLevelPack> BuildCurrentDirectoryPacks()
         {
             var manager = EnsureExistingManager();
-            SynchronizeDirectChildManagers(manager);
             PruneCompletedPendingDeletions();
+            SynchronizeDirectChildManagers(manager);
             var packs = new List<BeatmapLevelPack>();
 
             if (manager.Parent == null)
@@ -320,7 +363,10 @@ namespace PlaylistManager.UI
             }
 
             var childManagers = manager.GetChildManagers()
-                .Where(child => child != null && Directory.Exists(child.PlaylistPath) && !HasPlaylistIgnoreFile(child.PlaylistPath))
+                .Where(child => child != null
+                    && Directory.Exists(child.PlaylistPath)
+                    && !IsFolderPendingDeletion(child.PlaylistPath)
+                    && !HasPlaylistIgnoreFile(child.PlaylistPath))
                 .OrderBy(child => Path.GetFileName(child.PlaylistPath), StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
@@ -398,6 +444,14 @@ namespace PlaylistManager.UI
                     pendingDeletedPlaylistPaths.Remove(pendingDeletion.Key);
                 }
             }
+
+            foreach (var pendingDeletion in pendingDeletedFolderPaths.ToArray())
+            {
+                if (!Directory.Exists(pendingDeletion.Key) || now - pendingDeletion.Value >= PendingDeletionTimeout)
+                {
+                    pendingDeletedFolderPaths.Remove(pendingDeletion.Key);
+                }
+            }
         }
 
         private void SynchronizeDirectChildManagers(BeatSaberPlaylistsLib.PlaylistManager manager)
@@ -414,12 +468,15 @@ namespace PlaylistManager.UI
             }
 
             var existingPaths = new HashSet<string>(
-                manager.GetChildManagers().Select(child => Path.GetFullPath(child.PlaylistPath)),
+                manager.GetChildManagers().Select(child => NormalizePath(child.PlaylistPath)),
                 StringComparer.OrdinalIgnoreCase);
 
             foreach (var directoryPath in directDirectories)
             {
-                if (HasPlaylistIgnoreFile(directoryPath) || existingPaths.Contains(Path.GetFullPath(directoryPath)))
+                var normalizedDirectoryPath = NormalizePath(directoryPath);
+                if (pendingDeletedFolderPaths.ContainsKey(normalizedDirectoryPath)
+                    || HasPlaylistIgnoreFile(directoryPath)
+                    || existingPaths.Contains(normalizedDirectoryPath))
                 {
                     continue;
                 }
@@ -427,7 +484,7 @@ namespace PlaylistManager.UI
                 try
                 {
                     manager.CreateChildManager(Path.GetFileName(directoryPath));
-                    existingPaths.Add(Path.GetFullPath(directoryPath));
+                    existingPaths.Add(normalizedDirectoryPath);
                 }
                 catch (Exception exception)
                 {
@@ -685,6 +742,23 @@ namespace PlaylistManager.UI
 
             return true;
         }
+
+        private void RemoveCachedFolderCovers(string folderPath)
+        {
+            var folderPrefix = NormalizePath(folderPath) + Path.DirectorySeparatorChar;
+            foreach (var coverPath in folderCovers.Keys
+                .Where(path => NormalizePath(path).StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase))
+                .ToArray())
+            {
+                RemoveCachedCover(coverPath);
+            }
+        }
+
+        private bool IsFolderPendingDeletion(string folderPath)
+            => pendingDeletedFolderPaths.ContainsKey(NormalizePath(folderPath));
+
+        private static string NormalizePath(string path)
+            => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
         private static void DestroyFolderCover(Sprite sprite)
         {
