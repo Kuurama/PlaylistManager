@@ -81,6 +81,13 @@ namespace PlaylistManager.UI
             SetActive(_pageUpButton, hasOverflow);
             SetActive(_pageDownButton, hasOverflow);
             SetActive(_verticalScrollIndicator, hasOverflow);
+
+            if (_verticalScrollIndicator != null)
+            {
+                _verticalScrollIndicator.normalizedPageHeight = hasOverflow
+                    ? Mathf.Clamp01((float)VisibleRowCount / RowCount)
+                    : 1f;
+            }
         }
 
         internal void RefreshGridButtons()

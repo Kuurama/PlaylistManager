@@ -20,10 +20,10 @@ namespace PlaylistManager.UI
     /// </remarks>
     internal sealed class PlaylistGridScrollController : IInitializable, IDisposable, IAffinity
     {
-        private const float ScrollControlMargin = 1f;
+        private const float ScrollControlMargin = 0f;
         private const string ScrollControlsBsml =
             "<vertical id='vertical' horizontal-fit='PreferredSize' vertical-fit='PreferredSize' " +
-            "anchor-pos-x='32' anchor-pos-y='-25' pref-height='75' pref-width='8'>\n" +
+            "anchor-pos-x='32' anchor-pos-y='-25' pref-height='60' pref-width='8'>\n" +
             "<scroll-view id='scroll-view'/>\n" +
             "</vertical>";
 
@@ -36,6 +36,7 @@ namespace PlaylistManager.UI
         private AnnotatedBeatmapLevelCollectionsGridViewAnimator _gridViewAnimator;
         private PlaylistGridScrollView _gridScrollView;
         private Transform _scrollBar;
+        private Touchable _scrollHoverTouchable;
         private bool _pageControlWasActive;
         private bool _pageControlStateCaptured;
         private bool _isParsingControls;
@@ -72,6 +73,11 @@ namespace PlaylistManager.UI
         {
             _viewController.didOpenBeatmapLevelCollectionsEvent -= HandleGridOpened;
             _viewController.didCloseBeatmapLevelCollectionsEvent -= HandleGridClosed;
+
+            if (_scrollHoverTouchable != null)
+            {
+                UnityEngine.Object.Destroy(_scrollHoverTouchable);
+            }
         }
 
         [AffinityPatch(typeof(AnnotatedBeatmapLevelCollectionsGridViewAnimator), nameof(AnnotatedBeatmapLevelCollectionsGridViewAnimator.Init))]
@@ -115,6 +121,9 @@ namespace PlaylistManager.UI
             var content = _gridViewAnimator._contentTransform;
             content.localPosition = Vector3.zero;
 
+            _scrollHoverTouchable = viewport.gameObject.AddComponent<Touchable>();
+            _scrollHoverTouchable.raycastTarget = false;
+
             _scrollBar = _bsmlScrollView.transform.Find("ScrollBar");
             if (_scrollBar == null)
             {
@@ -126,17 +135,19 @@ namespace PlaylistManager.UI
             var pageDownButton = _bsmlScrollView._pageDownButton;
             var verticalScrollIndicator = _bsmlScrollView._verticalScrollIndicator;
 
-            // Place the top button one full playlist row below the surrounding menu.
-            _vertical.anchoredPosition += new Vector2(0f, -_gridView.cellHeight);
+            // Lower the top control by one row while shortening the control span by
+            // that row, keeping the bottom arrow above the floor.
+            _vertical.anchoredPosition += new Vector2(0f, -_gridView.cellHeight * 0.5f);
 
             _scrollBar.SetParent(_vertical);
-            // The viewport masks overflowing playlist rows. Keep the controls beside
-            // that mask rather than inside it, otherwise lowering them clips them too.
-            _vertical.SetParent(viewport.parent, true);
+            // OldPlaylists keeps these controls inside the native viewport. That
+            // makes Beat Saber's VR raycaster treat them as part of the grid instead
+            // of dropping focus while crossing to a synthetic sibling surface.
+            _vertical.SetParent(viewport, true);
+
             _vertical.SetAsLastSibling();
             _vertical.gameObject.SetActive(true);
             _scrollBar.gameObject.SetActive(false);
-            PositionScrollControls();
 
             // The temporary BSML ScrollView only supplies the game's standard controls.
             // The actual scrolling component must live beside the native grid animator.
@@ -170,15 +181,40 @@ namespace PlaylistManager.UI
             }
 
             _gridView._pageControl.gameObject.SetActive(false);
-            PositionScrollControls();
             _vertical.SetAsLastSibling();
             _vertical.gameObject.SetActive(true);
             _scrollBar.gameObject.SetActive(true);
+            _scrollHoverTouchable.raycastTarget = true;
+            LayoutRebuilder.ForceRebuildLayoutImmediate(_vertical);
             _gridScrollView.Open();
+        }
+
+        [AffinityPatch(typeof(AnnotatedBeatmapLevelCollectionsGridViewAnimator), nameof(AnnotatedBeatmapLevelCollectionsGridViewAnimator.AnimateOpen))]
+        [AffinityPostfix]
+        private void PositionScrollControlsAfterOpen(AnnotatedBeatmapLevelCollectionsGridViewAnimator __instance)
+        {
+            if (!ScrollingEnabled
+                || !ReferenceEquals(__instance, _gridViewAnimator)
+                || _vertical == null
+                || !_vertical.gameObject.activeInHierarchy)
+            {
+                return;
+            }
+
+            // Six-column grids have a selection-dependent horizontal offset while
+            // collapsed. Position only after AnimateOpen has normalized the content,
+            // otherwise that closed offset gets baked into the scrollbar position.
+            LayoutRebuilder.ForceRebuildLayoutImmediate(_vertical);
+            PositionScrollControls();
         }
 
         private void HandleGridClosed()
         {
+            if (_scrollHoverTouchable != null)
+            {
+                _scrollHoverTouchable.raycastTarget = false;
+            }
+
             if (_scrollBar != null)
             {
                 _scrollBar.gameObject.SetActive(false);
@@ -192,6 +228,11 @@ namespace PlaylistManager.UI
 
         private void DisableScrolling()
         {
+            if (_scrollHoverTouchable != null)
+            {
+                _scrollHoverTouchable.raycastTarget = false;
+            }
+
             if (_gridView != null)
             {
                 _gridView._pageControl.gameObject.SetActive(_pageControlWasActive);

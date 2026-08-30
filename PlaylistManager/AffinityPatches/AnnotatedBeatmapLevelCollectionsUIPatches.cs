@@ -291,9 +291,10 @@ namespace PlaylistManager.AffinityPatches
         {
             if (VerticalScrollingEnabled)
             {
-                // Keep Beat Saber's vertical opening, which naturally stops at the
-                // floor, but prevent it from adding a column on both horizontal sides.
-                var scrollViewportWidth = __instance._columnCount * __instance._columnWidth;
+                // Keep the selected grid content unchanged while retaining the game's
+                // normal empty column of open space on each side. The right-hand space
+                // houses the vertical controls and is made raycastable by the controller.
+                var scrollViewportWidth = (__instance._columnCount + 2) * __instance._columnWidth;
                 if (animated)
                 {
                     __instance._viewportSizeTween.toValue = new Vector2(
