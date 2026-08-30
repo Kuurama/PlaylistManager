@@ -77,6 +77,7 @@ namespace PlaylistManager.UI
         private readonly RectTransform queueModalTransform;
 
         private Vector3 queueModalPosition;
+        private Vector2? buttonGridOrigin;
         private bool triggerWasDown;
 
         [UIParams]
@@ -383,12 +384,15 @@ namespace PlaylistManager.UI
 
             const float horizontalStep = 7.7f;
             const float verticalStep = 6.85f;
+            const float lowerRowHorizontalOffset = -1.2f;
             Canvas.ForceUpdateCanvases();
-            var originalFlowButtonCenter = GetButtonVisualCenter(flowButton.GetComponent<UnityEngine.UI.Button>());
+            buttonGridOrigin ??= GetButtonVisualCenter(flowButton.GetComponent<UnityEngine.UI.Button>());
+            var gridOrigin = buttonGridOrigin.Value;
 
-            MoveButtonVisualCenter(deleteFolderButton.GetComponent<UnityEngine.UI.Button>(), originalFlowButtonCenter + new Vector2(-horizontalStep, 0f));
-            MoveButtonVisualCenter(downloadButton.GetComponent<UnityEngine.UI.Button>(), originalFlowButtonCenter + new Vector2(0f, verticalStep));
-            MoveButtonVisualCenter(createButton.GetComponent<UnityEngine.UI.Button>(), originalFlowButtonCenter + new Vector2(-horizontalStep, verticalStep));
+            MoveButtonVisualCenter(flowButton.GetComponent<UnityEngine.UI.Button>(), gridOrigin + new Vector2(lowerRowHorizontalOffset, 0f));
+            MoveButtonVisualCenter(deleteFolderButton.GetComponent<UnityEngine.UI.Button>(), gridOrigin + new Vector2(-horizontalStep + lowerRowHorizontalOffset, 0f));
+            MoveButtonVisualCenter(downloadButton.GetComponent<UnityEngine.UI.Button>(), gridOrigin + new Vector2(0f, verticalStep));
+            MoveButtonVisualCenter(createButton.GetComponent<UnityEngine.UI.Button>(), gridOrigin + new Vector2(-horizontalStep, verticalStep));
         }
 
         private void MoveButtonVisualCenter(UnityEngine.UI.Button button, Vector2 targetCenter)
