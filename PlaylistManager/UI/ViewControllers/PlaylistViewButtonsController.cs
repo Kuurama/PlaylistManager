@@ -95,7 +95,7 @@ namespace PlaylistManager.UI
             this.mainFlowCoordinator = mainFlowCoordinator;
             this.playlistManagerFlowCoordinator = playlistManagerFlowCoordinator;
             this.vrInputModule = vrInputModule;
-            vrPointer = (vrInputModule as VRUIControls.VRInputModule)?.vrPointer;
+            vrPointer = (vrInputModule as VRUIControls.VRInputModule)?._vrPointer;
             this.annotatedBeatmapLevelCollectionsViewController = annotatedBeatmapLevelCollectionsViewController;
             this.levelFilteringNavigationController = levelFilteringNavigationController;
             this.selectLevelCategoryViewController = selectLevelCategoryViewController;
